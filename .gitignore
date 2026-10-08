@@ -1,0 +1,4 @@
+kernel/build/
+__pycache__/
+*.pyc
+runs/
