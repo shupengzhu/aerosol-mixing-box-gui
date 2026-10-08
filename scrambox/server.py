@@ -186,6 +186,7 @@ def run_results(rid: str) -> dict:
             "species": g["species"]["aerosol"], "gases": g["species"]["gases"],
             "number_m3": _round(res["number_m3"]), "mass_ugm3": _round(res["mass_ugm3"]),
             "gas_ugm3": _round(res["gas_ugm3"]), "post": r.get("post"),
+            "het": _round(res["het"]) if "het" in res else None,
             "kernel": r["case"]["kernel"]["isorropia"], "notes": g.get("notes", [])}
 
 

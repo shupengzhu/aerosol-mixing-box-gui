@@ -49,8 +49,23 @@ program scram_box
   integer :: sid_pmd = -1, sid_pbc = -1, sid_pna = -1, sid_pso4 = -1, sid_pnh4 = -1
   integer :: sid_pno3 = -1, sid_phcl = -1, sid_poa = -1, sid_ph2o = -1
   integer :: sid_soa(5) = -1
-  integer :: gid_sulf = -1
+  integer :: gid_sulf = -1, gid_hno3 = -1
   integer :: soa_photolysis = 1
+  ! online heterogeneous N2O5 uptake, met column 9:
+  !   n2o5_mode 1 (production): P(N2O5) in ug m-3 s-1; steady state
+  !               [N2O5] = P / (k_het + k_other), k_other = other N2O5/NO3 losses
+  !   n2o5_mode 0 (concentration): prescribed [N2O5] in ug m-3, not depleted
+  !   het_rule 0: CESM (fixed gamma_cesm on the f_chm surface fraction, as
+  !               scram_hetchem_sad_export + mo_usrrxt); 1: per-species gamma,
+  !               dry-volume weighted, full wet surface
+  !   clno2_mode 0: no ClNO2; 1: yield phi = 1/(1 + [H2O]/(483 [Cl-])) (Bertram &
+  !               Thornton 2009). Products per N2O5: (2 - phi) HNO3 to the gas
+  !               phase, phi ClNO2 released with particle chloride.
+  integer, parameter :: MAXSP = 64
+  integer :: het_n2o5 = 0, het_rule = 0, clno2_mode = 0, n2o5_mode = 1
+  double precision :: gamma_cesm = 0.1d0, k_other_s1 = 0.d0
+  double precision :: gamma_n2o5(MAXSP) = 0.d0
+  logical :: is_chm(MAXSP) = .false.
   character(len=512) :: inputs_file = 'inputs.txt', output_file = 'output.txt'
   namelist /box_dims/ nsize, nfrac, naer, ngas, ngroup
   namelist /box_time/ duration_s, dt_s, substep_s, output_every_s
@@ -62,7 +77,9 @@ program scram_box
        salt_fix_size_rdb, dust_fix_size_rdb, nucl_rate_cap_cm3_s, &
        nucl_h2so4_gas_fraction_max, nucl_nh3_gas_fraction_max, soa_photolysis
   namelist /box_ids/ sid_pmd, sid_pbc, sid_pna, sid_pso4, sid_pnh4, sid_pno3, &
-       sid_phcl, sid_poa, sid_ph2o, sid_soa, gid_sulf
+       sid_phcl, sid_poa, sid_ph2o, sid_soa, gid_sulf, gid_hno3
+  namelist /box_het/ het_n2o5, het_rule, clno2_mode, gamma_cesm, gamma_n2o5, is_chm, &
+       n2o5_mode, k_other_s1
   namelist /box_files/ inputs_file, output_file
 
   ! ---- arrays
@@ -72,12 +89,14 @@ program scram_box
   double precision, allocatable :: emis_num(:), emis_mass(:,:), gas_src(:)
   double precision, allocatable :: bg_num(:), bg_mass(:,:), bg_gas(:)
   ! (NMETCOL, nmet): t, T, RH, P, J_NO2, particle emission factor, gas source factor,
-  ! dilution rate (1/s)
-  integer, parameter :: NMETCOL = 8
+  ! dilution rate (1/s), N2O5 (ug/m3)
+  integer, parameter :: NMETCOL = 9
   double precision, allocatable :: met(:,:)
   integer :: nbin, nmet, rc, u, ios, istep, nstep, isub, nsub, k, iout
   double precision :: t, tk, rh, p, jno2, efac, gfac, kdil, fdil, dt_sub, next_out, survival
   double precision :: mv(NMETCOL)
+  double precision :: het_k = 0.d0, het_sad = 0.d0, het_phi = 0.d0, het_n2o5_conc = 0.d0
+  double precision :: clno2_cum = 0.d0, hno3_het_cum = 0.d0, n2o5_up_cum = 0.d0
   double precision :: t0_wall, t1_wall
   character(len=512) :: nml_file
 
@@ -90,6 +109,7 @@ program scram_box
   rewind(u); read(u, nml=box_time, iostat=ios);  if (ios /= 0) call fail('bad &box_time')
   rewind(u); read(u, nml=box_proc, iostat=ios);  if (ios /= 0) call fail('bad &box_proc')
   rewind(u); read(u, nml=box_ids, iostat=ios);   if (ios /= 0) call fail('bad &box_ids')
+  rewind(u); read(u, nml=box_het, iostat=ios);   if (ios > 0) call fail('bad &box_het')
   rewind(u); read(u, nml=box_files, iostat=ios); if (ios /= 0) call fail('bad &box_files')
   close(u)
   if (nsize <= 0 .or. nfrac <= 0 .or. naer <= 0 .or. ngas <= 0) call fail('bad dimensions')
@@ -187,6 +207,15 @@ program scram_box
       gas  = gas  - fdil * (gas  - bg_gas)
     end if
 
+    ! online heterogeneous N2O5 uptake (prescribed N2O5), products added before SCRAM
+    if (het_n2o5 /= 0) then
+      if (mv(9) > 0.d0) then
+        call n2o5_uptake(mv(9), tk, dt_s)
+      else
+        het_k = 0.d0; het_phi = 0.d0; het_n2o5_conc = 0.d0
+      end if
+    end if
+
     ! SOA photolysis, the same first-order loss CESM applies before SCRAM
     if (soa_photolysis /= 0 .and. jno2 > 0.d0) then
       survival = exp(-0.0004d0 * jno2 * dt_s)
@@ -277,7 +306,7 @@ contains
     integer :: ncol, ios2
     read(uu, *, iostat=ios2) k, ncol, nmet
     if (ios2 /= 0 .or. trim(k) /= 'met' .or. ncol /= NMETCOL .or. nmet < 1) &
-         call fail('inputs: bad met block (expected "met 8 n")')
+         call fail('inputs: bad met block (expected "met 9 n")')
     allocate(met(NMETCOL, nmet))
     read(uu, *, iostat=ios2) met
     if (ios2 /= 0) call fail('inputs: cannot read met values')
@@ -304,9 +333,98 @@ contains
     v = met(:,i) + w * (met(:,i+1) - met(:,i))
   end subroutine met_at
 
+  subroutine n2o5_uptake(drive, tkel, dt)
+    ! k_p = sfc_p / (0.5 dm_p / Dg + 4 / (c gamma_p))   (CAM mo_usrrxt hetrxtrate)
+    ! sfc_p, dm_p: wet surface (cm2/cm3) and wet diameter (cm) of section p, dry
+    ! radius from its number and dry volume, water from PH2O (scram_hetchem_sad_export)
+    ! drive: P(N2O5) (ug m-3 s-1, n2o5_mode 1) or [N2O5] (ug m-3, n2o5_mode 0)
+    double precision, intent(in) :: drive, tkel, dt
+    double precision, parameter :: PI = 3.141592653589793d0, DG = 0.1d0
+    double precision, parameter :: MW_N2O5 = 108.01d0, MW_HNO3 = 63.01d0, MW_CL = 36.5d0
+    double precision, parameter :: MW_CLNO2 = 81.46d0, MW_H2O = 18.015d0
+    double precision :: c_gas, vd, vw, rdry, rwet, sfc, dm, gam, fchm, mdry, c_n2o5
+    double precision :: up, n_cl, n_h2o, phi, n_clno2, n_hno3, up_tot, cl_tot
+    double precision :: kp(nbin)
+    integer :: j, i
+    c_gas = 1.40d3 * sqrt(tkel)
+    het_k = 0.d0; het_sad = 0.d0; up_tot = 0.d0; cl_tot = 0.d0
+    kp = 0.d0
+    ! pass 1: first-order uptake rate of every section
+    do j = 1, nbin
+      if (num(j) <= 0.d0) cycle
+      vd = 0.d0; vw = 0.d0; mdry = 0.d0; fchm = 0.d0; gam = 0.d0
+      do i = 1, naer
+        if (mass(j,i) <= 0.d0) cycle
+        if (i == sid_ph2o) then
+          vw = vw + mass(j,i) / density(i)
+        else
+          vd = vd + mass(j,i) / density(i)
+          mdry = mdry + mass(j,i)
+          if (i <= MAXSP) then
+            if (is_chm(i)) fchm = fchm + mass(j,i)
+          end if
+        end if
+      end do
+      if (vd <= 0.d0 .or. mdry <= 0.d0) cycle
+      if (het_rule == 0) then
+        gam = gamma_cesm
+        fchm = fchm / mdry
+      else
+        do i = 1, min(naer, MAXSP)
+          if (i == sid_ph2o .or. mass(j,i) <= 0.d0) cycle
+          gam = gam + (mass(j,i) / density(i)) / vd * gamma_n2o5(i)
+        end do
+        fchm = 1.d0
+      end if
+      rdry = (3.d0 * vd / num(j) / (4.d0 * PI))**(1.d0/3.d0)          ! um
+      rwet = rdry * (1.d0 + vw / vd)**(1.d0/3.d0)
+      sfc = 1.d-2 * num(j) * PI * (2.d0 * rwet * 1.d-6)**2              ! cm2/cm3
+      het_sad = het_sad + sfc
+      sfc = sfc * fchm
+      dm = 2.d0 * rwet * 1.d-4                                          ! cm
+      if (gam <= 0.d0 .or. sfc <= 0.d0) cycle
+      kp(j) = sfc / (0.5d0 * dm / DG + 4.d0 / (c_gas * gam))
+      het_k = het_k + kp(j)
+    end do
+    if (n2o5_mode == 1) then
+      c_n2o5 = 0.d0
+      if (het_k + k_other_s1 > 0.d0) c_n2o5 = drive / (het_k + k_other_s1)
+    else
+      c_n2o5 = drive
+    end if
+    het_n2o5_conc = c_n2o5
+    ! pass 2: uptake and products
+    do j = 1, nbin
+      if (kp(j) <= 0.d0) cycle
+      up = kp(j) * c_n2o5 * dt / MW_N2O5                                ! umol/m3
+      phi = 0.d0
+      if (clno2_mode == 1 .and. sid_phcl >= 1 .and. sid_ph2o >= 1) then
+        n_cl = max(mass(j,sid_phcl), 0.d0) / MW_CL
+        n_h2o = max(mass(j,sid_ph2o), 0.d0) / MW_H2O
+        if (n_cl > 0.d0 .and. n_h2o > 0.d0) phi = 1.d0 / (1.d0 + n_h2o / (483.d0 * n_cl))
+      end if
+      n_clno2 = 0.d0
+      if (phi > 0.d0) then
+        n_clno2 = min(phi * up, mass(j,sid_phcl) / MW_CL)
+        mass(j,sid_phcl) = max(mass(j,sid_phcl) - n_clno2 * MW_CL, 0.d0)
+      end if
+      n_hno3 = 2.d0 * up - n_clno2
+      if (gid_hno3 >= 1) gas(gid_hno3) = gas(gid_hno3) + n_hno3 * MW_HNO3
+      up_tot = up_tot + up
+      cl_tot = cl_tot + n_clno2
+      clno2_cum = clno2_cum + n_clno2 * MW_CLNO2
+      hno3_het_cum = hno3_het_cum + n_hno3 * MW_HNO3
+    end do
+    n2o5_up_cum = n2o5_up_cum + up_tot * MW_N2O5
+    het_phi = 0.d0
+    if (up_tot > 0.d0) het_phi = cl_tot / up_tot
+  end subroutine n2o5_uptake
+
   subroutine write_state(tt, tk_o, rh_o, p_o)
     double precision, intent(in) :: tt, tk_o, rh_o, p_o
     write(iout,'(A,4ES17.8E3)') 'time', tt, tk_o, rh_o, p_o
+    if (het_n2o5 /= 0) write(iout,'(A,7ES17.8E3)') 'het', het_k, het_sad, het_phi, &
+         n2o5_up_cum, hno3_het_cum, clno2_cum, het_n2o5_conc
     write(iout,'(A,I0)') 'number_m3 ', nbin
     write(iout,'(5ES17.8E3)') num
     write(iout,'(A,I0)') 'mass_ugm3 ', nbin*naer

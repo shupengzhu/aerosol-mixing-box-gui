@@ -37,6 +37,15 @@ DEFAULTS = {
                  "salt_rdb_bidirectional": False, "salt_fix_size_rdb": False,
                  "dust_fix_size_rdb": False, "nucl_rate_cap_cm3_s": 1.0e3,
                  "nucl_h2so4_gas_fraction_max": 0.25, "nucl_nh3_gas_fraction_max": 0.25},
+    # online heterogeneous N2O5 uptake; mode "production": P(N2O5) with steady state
+    # [N2O5] = P / (k_het + k_other); mode "concentration": prescribed [N2O5].
+    # environment.time_series may carry "n2o5_production_ugm3_s" or "n2o5_ugm3".
+    # Products (2 - phi) HNO3 and phi ClNO2 (particle chloride).
+    "chemistry": {"n2o5_uptake": {"enabled": False, "mode": "production",
+                                  "n2o5_production_ugm3_s": 1.2e-3, "k_other_s1": 2.0e-3,
+                                  "n2o5_ugm3": 0.0, "rule": "cesm",
+                                  "gamma_cesm": 0.1, "species_gamma": None,
+                                  "clno2_yield": "bertram_thornton"}},
     "postprocess": {"optics": {"enabled": False}, "ccn": {"enabled": False},
                     "hetchem": {"enabled": False}},
     "output": {"format": "npz"},
@@ -53,6 +62,9 @@ ENUMS = {
     "processes.wet_diameter": ["isorropia", "gerber"],
     "processes.nucleation.model": ["binary", "ternary"],
     "mixing.preset": ["NC1", "NC6", "NC11", "custom"],
+    "chemistry.n2o5_uptake.rule": ["cesm", "species"],
+    "chemistry.n2o5_uptake.mode": ["production", "concentration"],
+    "chemistry.n2o5_uptake.clno2_yield": ["none", "bertram_thornton"],
 }
 
 

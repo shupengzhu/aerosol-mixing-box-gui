@@ -93,7 +93,13 @@ function resOverview(body, R) {
     chartCard("PM dry (µg m⁻³)", box => Charts.line(box, { stacked: true, series: act.map(o => ({ name: o.s, x: th(R), y: spMass[o.i] })), xlabel: t("time_hours"), ylabel: "µg m⁻³" })),
     chartCard("PH2O (µg m⁻³)", box => Charts.line(box, { series: [{ name: "PH2O", x: th(R), y: spMass[iw], area: true }], xlabel: t("time_hours"), ylabel: "µg m⁻³" })),
     gasCard,
-    chartCard("T / RH", box => Charts.line(box, { series: [{ name: "RH (%)", x: th(R), y: R.met.map(m => m[1] * 100) }, { name: "T − 273.15 (°C)", x: th(R), y: R.met.map(m => m[0] - 273.15) }], xlabel: t("time_hours") }))));
+    chartCard("T / RH", box => Charts.line(box, { series: [{ name: "RH (%)", x: th(R), y: R.met.map(m => m[1] * 100) }, { name: "T − 273.15 (°C)", x: th(R), y: R.met.map(m => m[0] - 273.15) }], xlabel: t("time_hours") })),
+    R.het ? chartCard(t("het_online") + " (µg m⁻³)", box => Charts.line(box, { xlabel: t("time_hours"), ylabel: "µg m⁻³", series: [
+      { name: "N2O5 uptake (cum.)", x: th(R), y: R.het.map(r => r[3]) }, { name: "HNO3 produced (cum.)", x: th(R), y: R.het.map(r => r[4]) },
+      { name: "ClNO2 produced (cum.)", x: th(R), y: R.het.map(r => r[5]) }] })) : null,
+    R.het ? chartCard("k(N2O5) (s⁻¹) / φ(ClNO2)", box => Charts.line(box, { xlabel: t("time_hours"), series: [
+      { name: "k (1/s)", x: th(R), y: R.het.map(r => r[0]) }, { name: "φ", x: th(R), y: R.het.map(r => r[2]) },
+      { name: "[N2O5] (µg m⁻³)", x: th(R), y: R.het.map(r => r[6]) }] })) : null));
 }
 
 function timeSlider(R) {

@@ -95,6 +95,24 @@ no-ISO 与整体平衡方案 600 s**（CESM `scram_target_dt`）。大于 dt_s �
 null = 同颗粒排放，`"jno2"` = 按 J_NO2/max(J_NO2)（光化学生成的替代），或 `{time_s, factor}`。
 box 没有气相化学，H2SO4、HNO3、SOA 前体用气体源项给出。
 
+### 3.6 在线 N2O5 非均相吸收（`chemistry.n2o5_uptake`）
+
+```json
+"chemistry": {"n2o5_uptake": {"enabled": true, "mode": "production",
+                              "n2o5_production_ugm3_s": 1.2e-3, "k_other_s1": 2.0e-3,
+                              "rule": "cesm", "gamma_cesm": 0.1, "species_gamma": null,
+                              "clno2_yield": "bertram_thornton"}}
+```
+
+在 Fortran 驱动里每步（SCRAM 调用之前）计算：各粒径段 k_p = sfc_p/(0.5·dm_p/Dg + 4/(c·γ_p))，
+表面与湿直径同 `scram_hetchem_sad_export`；`rule: cesm` 为 CESM 固定 γ 作用于 f_chm 表面，`species` 为物种 γ
+（缺省取后处理 γ 表的 N2O5 列）。`mode: production` 时 [N2O5] = P/(Σk_p + k_other)（夜间 NO3+NO2 生成受限的稳态），
+`concentration` 时为给定浓度（不消耗；只适合短时间敏感性试验，长时间会使硝酸盐–含水–表面正反馈失控）。
+每吸收 1 mol N2O5：(2−φ) mol HNO3 进入气相，由内核热力学分配；φ mol ClNO2 释放并扣除颗粒氯，
+φ = 1/(1 + [H2O]/(483[Cl⁻]))（Bertram & Thornton 2009，按各段颗粒含水与氯计算）。
+输出 `het` 行：k、湿表面积、φ、累计 N2O5 吸收、HNO3 与 ClNO2 生成、[N2O5]。
+在线 k 与后处理 CESM 规则的 k 逐位一致（同一状态下 4.98e-3 s⁻¹）。
+
 ## 4. 情景库
 
 `scenarios/*.json` 由 `tools/make_scenarios.py` 生成（转换过程可复现）；用户情景存于
@@ -110,11 +128,17 @@ box 没有气相化学，H2SO4、HNO3、SOA 前体用气体源项给出。
 | urban_plume_aging | 混合态 | PartMC urban plume：背景 Aitken/积聚模态，柴油/汽油/烹饪排放 12 h，稀释 1.5e-5 s⁻¹，按 J_NO2 的 H2SO4/HNO3/SOA 源，24 h |
 | seasalt_nitrate | 混合态 | CESM 海盐分配（PNA 0.3866、PHCL 0.6134）+ 大陆硫酸铵 + HNO3 |
 | dust_crustal | 混合态 | 沙尘细/粗模态（CMAQ 地壳离子由 v2.3 内核诊断）+ 污染气体，RH 30→85 % |
+| nocturnal_n2o5_clno2 | 混合态 | 沿海夜间 18–06 时：海盐、硫酸铵-硝酸铵、有机包覆颗粒，在线 N2O5 吸收（1 ppb/h），HNO3 与 ClNO2 |
 
 旧情景转换要点（写在各情景 notes 中）：H2O 有机物按 298 K 的 C* 归入最近的 VBS 档
 （C* > 1000 µg m⁻³ 的气相不表示）；颗粒 POA → PPOAlP（CESM POA 不挥发），POA 气体与排放按 C* 归入
 SOA 气体档；旧的外混初始按 沙尘 / BC / 无机 / 有机 四个群分配，数浓度按体积分配。
 海盐不采用 CMAQ sea_spc（含 SO4 而缺少 6 % 的 Mg/Ca/K，v1 下阴离子过剩，1 h 内约 25 % 的 Cl 以 HCl 逸出）。
+
+> v2.3 海盐电荷修正（CESM-SCRAM fd38780）：海盐以电中性 NaCl 进入 SCRAM（PNA:PHCL = 23:36.5），
+> 原 v2.3 适配层把按 Na 诊断的 Ca/K/Mg 叠加上去，阳离子当量多出约 29 %（box 检验：各海盐段阳/阴离子比 1.22–1.25）。
+> 现改为把钠当量按海水比例重新分配（Na 0.775、Mg 0.175、Ca 0.034、K 0.017），比值回到 0.98（余量为 Cl 摩尔质量记法差）。
+> 只改 `USE_ISORROPIA2` 内的代码，默认预处理源码逐字节不变。12 h 后 HCl 释放：v1 3.2、原 v2.3 2.5、修正后 2.8 µg m⁻³。
 
 ## 5. 后处理（与 CESM 同一套计算，`scrambox/post`）
 
@@ -179,6 +203,7 @@ python3 -m scrambox run scenarios/dust_crustal.json -o runs/dust   # 命令行
 
 ## 8. 状态与后续
 
-已完成：内核驱动、编译器、10 个情景、三个后处理模块、实验组、网页界面（中英文）。
-后续：非均相化学在线耦合（N2O5 → HNO3 / ClNO2 回到热力学）；单机安装包（内核静态链接 + 打包 Python 与网页）；
-CCN 与光学在 CESM 同一状态上的逐点核对（需要从 CESM 输出导出单柱状态）。
+已完成：内核驱动、编译器、11 个情景、三个后处理模块、在线 N2O5 吸收（HNO3 / ClNO2 回到热力学）、
+实验组、网页界面（中英文）。
+后续：单机安装包（内核静态链接 + 打包 Python 与网页）；CCN 与光学在 CESM 同一状态上的逐点核对
+（需要从 CESM 输出导出单柱状态）；PartMC 对比（同一情景输入）。

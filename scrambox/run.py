@@ -42,10 +42,9 @@ def _num(tok: str) -> float:
 
 def read_output(path: str | Path, nsize: int, nfrac: int, naer: int, ngas: int) -> dict:
     nbin = nsize * nfrac
-    times, met, num, mass, gas = [], [], [], [], []
+    times, met, num, mass, gas, het = [], [], [], [], [], []
     cpu = None
     with open(path) as f:
-        tokens = None
         for line in f:
             parts = line.split()
             if not parts or parts[0].startswith("#"):
@@ -54,6 +53,10 @@ def read_output(path: str | Path, nsize: int, nfrac: int, naer: int, ngas: int) 
             if key == "time":
                 times.append(_num(parts[1]))
                 met.append([_num(x) for x in parts[2:5]])
+            elif key == "het":
+                # k (1/s), wet SAD (cm2/cm3), ClNO2 yield, cumulative N2O5 uptake,
+                # HNO3 and ClNO2 production (ug/m3), N2O5 (ug/m3)
+                het.append([_num(x) for x in parts[1:8]])
             elif key in ("number_m3", "mass_ugm3", "gas_ugm3"):
                 n = int(parts[1])
                 vals = []
@@ -71,7 +74,8 @@ def read_output(path: str | Path, nsize: int, nfrac: int, naer: int, ngas: int) 
     num = np.array(num).reshape(len(times), nsize, nfrac)
     mass = np.array(mass).reshape(len(times), nsize, nfrac, naer)
     return {"time_s": np.array(times), "met": np.array(met), "number_m3": num,
-            "mass_ugm3": mass, "gas_ugm3": np.array(gas), "cpu_s": cpu}
+            "mass_ugm3": mass, "gas_ugm3": np.array(gas), "cpu_s": cpu,
+            "het": np.array(het) if het else None}
 
 
 def conservation(res: dict, grid: dict) -> dict:

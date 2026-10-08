@@ -359,6 +359,44 @@ def build():
                "Run with kernel v1 and v23 to see the effect of the crustal cations."],
         tags=["sea salt", "nitrate", "chloride depletion", "ISORROPIA II"]))
 
+    night = [float(h) for h in range(0, 13)]
+    out.append(scenario(
+        "nocturnal_n2o5_clno2", "mixing_state", "Nocturnal N2O5 uptake and ClNO2 (coastal)",
+        "夜间 N2O5 吸收与 ClNO2（沿海）",
+        "A polluted coastal air mass from 18:00 to 06:00: sea salt, ammonium sulfate-nitrate and "
+        "organic-coated particles take up N2O5 (produced at 1 ppb/h) online; the products HNO3 and ClNO2 change "
+        "nitrate and chloride. The ClNO2 yield depends on which particles carry chloride and water, "
+        "i.e. on the mixing state.",
+        "18:00 至次日 06:00 的沿海污染气团：海盐、硫酸铵-硝酸铵与有机包覆颗粒在线吸收 N2O5（生成速率 1 ppb/h），"
+        "产物 HNO3 与 ClNO2 改变硝酸盐与氯。ClNO2 产率取决于哪些颗粒携带氯与水，即取决于混合态。",
+        {"case": {"reference": "Bertram and Thornton (2009) ACP; Riemer et al. (2009) JGR (N2O5 and mixing state)"},
+         "kernel": {"isorropia": "v23"},
+         "environment": {"temperature_K": 285.0, "pressure_Pa": 101325.0, "relative_humidity": 0.75,
+                         "time_series": {"time_s": [h * H for h in night],
+                                         "temperature_K": [287.0 - 0.4 * h for h in night],
+                                         "relative_humidity": [0.70 + 0.015 * h for h in night]}},
+         "time": {"duration_s": 12 * H, "dt_s": 600.0, "output_every_s": 1800.0},
+         "mixing": {"preset": "NC6"},
+         "size_bins": {"mode": "log", "n": 14, "dmin_um": 0.01, "dmax_um": 10.0},
+         "initial": {"particles": {"mode": "lognormal", "modes": [
+             {"name": "sea salt", "number_cm3": 20, "dg_um": 0.3, "sigma_g": 2.0, "mass_fraction": SEA_SALT},
+             {"name": "ammonium sulfate-nitrate", "number_cm3": 3000, "dg_um": 0.12, "sigma_g": 1.6,
+              "mass_fraction": {"PSO4": 0.45, "PNH4": 0.25, "PNO3": 0.30}},
+             {"name": "organic-coated", "number_cm3": 2000, "dg_um": 0.15, "sigma_g": 1.6,
+              "mass_fraction": {"PSO4": 0.25, "PNH4": 0.08, "PSOA2P": 0.37, "PPOAlP": 0.20, "PBC": 0.10}}]},
+             "gas_ugm3": {"NH3": 2.0, "HNO3": 0.5}},
+         "chemistry": {"n2o5_uptake": {"enabled": True, "mode": "production",
+                                       "n2o5_production_ugm3_s": 1.2e-3, "k_other_s1": 2.0e-3,
+                                       "rule": "cesm", "clno2_yield": "bertram_thornton"}},
+         "postprocess": {"hetchem": {"enabled": True, "every": 2}}},
+        notes=["N2O5 production 1 ppb/h (NO3 + NO2) with steady state [N2O5] = P / (k_het + k_other), "
+               "k_other = 2e-3 1/s for the other NO3/N2O5 losses; k_het as CAM hetrxtrate on the current "
+               "particles (CESM gamma 0.1 on the f_chm surface by default; switch to the species gamma "
+               "table in Setup).",
+               "Products per N2O5: (2 - phi) HNO3 to the gas phase, phi ClNO2 with particle chloride; "
+               "phi = 1/(1 + [H2O]/(483 [Cl-])) per section (Bertram & Thornton 2009)."],
+        tags=["N2O5", "ClNO2", "night", "chloride", "heterogeneous chemistry"]))
+
     rh_ramp = [0.30 + 0.55 * min(h / 10.0, 1.0) for h in hours[:13]]
     t_ramp = [300.0 - 0.6 * h for h in hours[:13]]
     out.append(scenario(

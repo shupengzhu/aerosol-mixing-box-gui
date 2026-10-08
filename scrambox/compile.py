@@ -190,6 +190,13 @@ def met_table(c: dict) -> np.ndarray:
     f_p = series("pressure_Pa", e["pressure_Pa"])
     f_j = series("jno2_s1", e.get("jno2_s1", 0.0))
     f_k = series("dilution_s1", (e.get("dilution") or {}).get("rate_s1", 0.0))
+    het = (c.get("chemistry") or {}).get("n2o5_uptake") or {}
+    if not het.get("enabled"):
+        f_n = lambda t: 0.0
+    elif het.get("mode", "production") == "production":
+        f_n = series("n2o5_production_ugm3_s", het.get("n2o5_production_ugm3_s", 0.0))
+    else:
+        f_n = series("n2o5_ugm3", het.get("n2o5_ugm3", 0.0))
     f_e = profile(prof)
     if gprof == "jno2":                       # photochemical production proxy
         jmax = max([f_j(t) for t in times] + [1e-30])
@@ -199,7 +206,31 @@ def met_table(c: dict) -> np.ndarray:
     else:
         f_g = profile(gprof)
     return np.array([[t, f_t(t), min(max(f_rh(t), 0.0), 1.0), f_p(t), max(f_j(t), 0.0),
-                      f_e(t), f_g(t), max(f_k(t), 0.0)] for t in times]).T
+                      f_e(t), f_g(t), max(f_k(t), 0.0), max(f_n(t), 0.0)] for t in times]).T
+
+
+CHM_SPECIES = {"PSO4", "PNH4", "PNO3", "PBC", "PSOA1P", "PSOA2P", "PSOA3P", "PSOA4P", "PSOA5P"}
+MAXSP = 64                                   # size of the driver's per-species het arrays
+
+
+def het_namelist(c: dict, table: sp.SpeciesTable) -> dict:
+    """&box_het for the driver's online N2O5 uptake."""
+    h = (c.get("chemistry") or {}).get("n2o5_uptake") or {}
+    if len(table.aerosol) > MAXSP:
+        raise ValueError(f"at most {MAXSP} aerosol species")
+    sg = h.get("species_gamma")
+    if sg is None:                                   # the N2O5 column of the post-processing table
+        sg = (((c.get("postprocess") or {}).get("hetchem") or {}).get("species_gamma") or {}).get("N2O5")
+    if sg is None:                                   # default reproduces the CESM selection
+        sg = {s: (float(h.get("gamma_cesm", 0.1)) if s in CHM_SPECIES else 0.0) for s in table.aerosol}
+    return {"het_n2o5": int(bool(h.get("enabled"))),
+            "het_rule": 0 if h.get("rule", "cesm") == "cesm" else 1,
+            "clno2_mode": 1 if h.get("clno2_yield", "bertram_thornton") == "bertram_thornton" else 0,
+            "gamma_cesm": float(h.get("gamma_cesm", 0.1)),
+            "gamma_n2o5": [float(sg.get(s, 0.0)) for s in table.aerosol],
+            "is_chm": [s in CHM_SPECIES for s in table.aerosol],
+            "n2o5_mode": 1 if h.get("mode", "production") == "production" else 0,
+            "k_other_s1": float(h.get("k_other_s1", 0.0))}
 
 
 def _block(name, arr) -> str:
@@ -275,15 +306,20 @@ def compile_case(user_case: dict, run_dir: str | Path) -> dict:
                     "sid_pso4": ids["PSO4"], "sid_pnh4": ids["PNH4"], "sid_pno3": ids["PNO3"],
                     "sid_phcl": ids["PHCL"], "sid_poa": ids["PPOAlP"], "sid_ph2o": ids["PH2O"],
                     "sid_soa": [ids[f"PSOA{i}P"] for i in range(1, 6)],
-                    "gid_sulf": table.gases.index("SULF") + 1 if "SULF" in table.gases else -1},
+                    "gid_sulf": table.gases.index("SULF") + 1 if "SULF" in table.gases else -1,
+                    "gid_hno3": table.gases.index("HNO3") + 1 if "HNO3" in table.gases else -1},
+        "box_het": het_namelist(c, table),
         "box_files": {"inputs_file": "inputs.txt", "output_file": "output.txt"},
     }
     lines = []
+    fval = lambda x: (".true." if x else ".false.") if isinstance(x, bool) else (f"{x:.10g}" if isinstance(x, float) else str(x))
     for group, vals in nml.items():
         lines.append(f"&{group}")
         for k, v in vals.items():
             if isinstance(v, list):
-                v = ", ".join(str(x) for x in v)
+                v = ", ".join(fval(x) for x in v)
+            elif isinstance(v, bool):
+                v = fval(v)
             elif isinstance(v, str):
                 v = f"'{v}'"
             elif isinstance(v, float):

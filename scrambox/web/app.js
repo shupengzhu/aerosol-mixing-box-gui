@@ -312,8 +312,25 @@ function setupKernel(body) {
         field("fixed density (kg/m³)", num("processes.density.fixed_kgm3"))),
       h("div", { class: "row", style: { gap: "22px", marginTop: "10px" } },
         ["salt_rdb_bidirectional", "salt_fix_size_rdb", "dust_fix_size_rdb"].map(k => toggle("advanced." + k, k))))),
+    hetCard(),
     h("div", { class: "card" }, h("h2", {}, "Kernel build"),
       ["v1", "v23"].map(v => h("details", {}, h("summary", {}, `${v}: ${kv[v].available ? "available" : "missing"}`), h("pre", { class: "mono small" }, kv[v].version)))));
+}
+
+function hetCard() {
+  const on = getPath(S.case, "chemistry.n2o5_uptake.enabled");
+  return h("div", { class: "card" },
+    h("div", { class: "row" }, h("h2", {}, t("het_online")), h("span", { class: "spacer" }), toggle("chemistry.n2o5_uptake.enabled", t("enabled"), () => render())),
+    h("p", { class: "sub" }, t("het_online_hint")),
+    on ? h("div", { class: "fields" },
+      field(t("n2o5_mode"), sel("chemistry.n2o5_uptake.mode", [{ v: "production", label: t("n2o5_prod") }, { v: "concentration", label: t("n2o5_conc") }], () => render())),
+      getPath(S.case, "chemistry.n2o5_uptake.mode") === "concentration"
+        ? field("N2O5 (µg m⁻³)", num("chemistry.n2o5_uptake.n2o5_ugm3"), t("n2o5_ts_hint"))
+        : field("P(N2O5) (µg m⁻³ s⁻¹)", num("chemistry.n2o5_uptake.n2o5_production_ugm3_s"), "1 ppb/h ≈ 1.2e-3"),
+      getPath(S.case, "chemistry.n2o5_uptake.mode") === "concentration" ? null : field("k_other (s⁻¹)", num("chemistry.n2o5_uptake.k_other_s1")),
+      field(t("het_rules"), sel("chemistry.n2o5_uptake.rule", [{ v: "cesm", label: "CESM (γ on f_chm surface)" }, { v: "species", label: t("gamma_table") }])),
+      field("γ (CESM)", num("chemistry.n2o5_uptake.gamma_cesm")),
+      field("ClNO2", sel("chemistry.n2o5_uptake.clno2_yield", [{ v: "bertram_thornton", label: "φ = 1/(1+[H2O]/(483[Cl⁻]))" }, { v: "none", label: t("none") }]))) : null);
 }
 
 function setupEnv(body) {
@@ -335,7 +352,7 @@ function setupEnv(body) {
       changed("environment"); render();
     } }), h("span")), t("time_varying")));
   if (ts) {
-    const cols = [["time_s", t("time_h"), 3600], ["temperature_K", "T (K)", 1], ["relative_humidity", "RH", 1], ["pressure_Pa", "P (Pa)", 1], ["jno2_s1", "J(NO2)", 1], ["dilution_s1", t("dilution"), 1]];
+    const cols = [["time_s", t("time_h"), 3600], ["temperature_K", "T (K)", 1], ["relative_humidity", "RH", 1], ["pressure_Pa", "P (Pa)", 1], ["jno2_s1", "J(NO2)", 1], ["dilution_s1", t("dilution"), 1], ["n2o5_production_ugm3_s", "P(N2O5)", 1], ["n2o5_ugm3", "N2O5 (µg m⁻³)", 1]];
     cols.forEach(([k]) => { if (!ts[k]) ts[k] = ts.time_s.map(() => (k === "pressure_Pa" ? c.environment.pressure_Pa : 0)); });
     card1.append(h("div", { style: { marginTop: "12px" } }, editTable({
       rows: ts.time_s.map((_, i) => String(i + 1)), cols: cols.map(x => x[1]), corner: "#",
