@@ -5,7 +5,8 @@
 ! CESM (carma_model_mod, CARMA_DiagnoseBins):
 !   scram_cesm_init_from_discretization  (once)
 !   per step:  emissions and gas sources (operator splitting, before SCRAM,
-!              as CAM applies its tendencies before SCRAM)
+!              as CAM applies its tendencies before SCRAM), then dilution
+!              towards a background state, x <- x - (1-exp(-k dt)) (x - x_bg)
 !              SOA photolysis loss exp(-0.0004 J_NO2 dt) (as CESM)
 !              scram_cesm_set_met, scram_cesm_set_hygro_rh, scram_cesm_set_state
 !              n_sub x scram_cesm_step(dt/n_sub)   (scram_target_dt, 600 s in CESM)
@@ -69,9 +70,14 @@ program scram_box
   integer, allocatable :: group_rel(:)
   double precision, allocatable :: num(:), mass(:,:), gas(:)
   double precision, allocatable :: emis_num(:), emis_mass(:,:), gas_src(:)
-  double precision, allocatable :: met(:,:)          ! (6, nmet): t, T, RH, P, jno2, emis_factor
+  double precision, allocatable :: bg_num(:), bg_mass(:,:), bg_gas(:)
+  ! (NMETCOL, nmet): t, T, RH, P, J_NO2, particle emission factor, gas source factor,
+  ! dilution rate (1/s)
+  integer, parameter :: NMETCOL = 8
+  double precision, allocatable :: met(:,:)
   integer :: nbin, nmet, rc, u, ios, istep, nstep, isub, nsub, k, iout
-  double precision :: t, tk, rh, p, jno2, efac, dt_sub, next_out, survival
+  double precision :: t, tk, rh, p, jno2, efac, gfac, kdil, fdil, dt_sub, next_out, survival
+  double precision :: mv(NMETCOL)
   double precision :: t0_wall, t1_wall
   character(len=512) :: nml_file
 
@@ -127,6 +133,7 @@ program scram_box
   if (ios /= 0) call fail('cannot open '//trim(inputs_file))
   allocate(bin_bound_m(nsize+1), comp_bounds(nfrac*ngroup*2), density(naer), group_rel(naer))
   allocate(num(nbin), mass(nbin,naer), gas(ngas), emis_num(nbin), emis_mass(nbin,naer), gas_src(ngas))
+  allocate(bg_num(nbin), bg_mass(nbin,naer), bg_gas(ngas))
   call read_block(u, 'bin_bound_m', bin_bound_m)
   call read_block(u, 'comp_bounds', comp_bounds)
   call read_block(u, 'density_ugum3', density)
@@ -137,6 +144,9 @@ program scram_box
   call read_block(u, 'emis_number_m3s', emis_num)
   call read_block2(u, 'emis_mass_ugm3s', emis_mass)
   call read_block(u, 'gas_source_ugm3s', gas_src)
+  call read_block(u, 'bg_number_m3', bg_num)
+  call read_block2(u, 'bg_mass_ugm3', bg_mass)
+  call read_block(u, 'bg_gas_ugm3', bg_gas)
   call read_met(u)
   close(u)
 
@@ -154,18 +164,28 @@ program scram_box
   nsub = max(1, nint(dt_s / max(substep_s, 1.d-9)))
   dt_sub = dt_s / dble(nsub)
   t = 0.d0
-  call met_at(t, tk, rh, p, jno2, efac)
-  call write_state(t, tk, rh, p)
+  call met_at(t, mv)
+  call write_state(t, mv(2), mv(3), mv(4))
   next_out = output_every_s
 
   do istep = 1, nstep
     call box_set_nstep(istep)
-    call met_at(t, tk, rh, p, jno2, efac)
+    call met_at(t, mv)
+    tk = mv(2); rh = mv(3); p = mv(4); jno2 = mv(5)
+    efac = mv(6); gfac = mv(7); kdil = max(mv(8), 0.d0)
 
     ! emissions and gas sources over the step (before SCRAM, as in CESM)
     num  = num  + emis_num  * efac * dt_s
     mass = mass + emis_mass * efac * dt_s
-    gas  = gas  + gas_src   * efac * dt_s
+    gas  = gas  + gas_src   * gfac * dt_s
+
+    ! dilution (mixing with the background air mass)
+    if (kdil > 0.d0) then
+      fdil = 1.d0 - exp(-kdil * dt_s)
+      num  = num  - fdil * (num  - bg_num)
+      mass = mass - fdil * (mass - bg_mass)
+      gas  = gas  - fdil * (gas  - bg_gas)
+    end if
 
     ! SOA photolysis, the same first-order loss CESM applies before SCRAM
     if (soa_photolysis /= 0 .and. jno2 > 0.d0) then
@@ -194,7 +214,7 @@ program scram_box
   end do
 
   call cpu_time(t1_wall)
-  write(iout,'(A,ES16.8)') 'cpu_s', t1_wall - t0_wall
+  write(iout,'(A,ES17.8E3)') 'cpu_s', t1_wall - t0_wall
   write(iout,'(A)') 'end'
   close(iout)
   write(*,'(A,I0,A,I0,A,F10.2,A)') 'scram_box: ', nstep, ' steps x ', nsub, ' substeps, cpu ', &
@@ -256,50 +276,43 @@ contains
     character(len=64) :: k
     integer :: ncol, ios2
     read(uu, *, iostat=ios2) k, ncol, nmet
-    if (ios2 /= 0 .or. trim(k) /= 'met' .or. ncol /= 6 .or. nmet < 1) &
-         call fail('inputs: bad met block (expected "met 6 n")')
-    allocate(met(6, nmet))
+    if (ios2 /= 0 .or. trim(k) /= 'met' .or. ncol /= NMETCOL .or. nmet < 1) &
+         call fail('inputs: bad met block (expected "met 8 n")')
+    allocate(met(NMETCOL, nmet))
     read(uu, *, iostat=ios2) met
     if (ios2 /= 0) call fail('inputs: cannot read met values')
   end subroutine read_met
 
-  subroutine met_at(tt, tk_o, rh_o, p_o, j_o, f_o)
+  subroutine met_at(tt, v)
     ! piecewise-linear in time, constant outside the given range
     double precision, intent(in) :: tt
-    double precision, intent(out) :: tk_o, rh_o, p_o, j_o, f_o
+    double precision, intent(out) :: v(NMETCOL)
     integer :: i
     double precision :: w
     if (nmet == 1 .or. tt <= met(1,1)) then
-      i = 1; w = 0.d0
+      v = met(:,1)
+      return
     else if (tt >= met(1,nmet)) then
-      i = nmet - 1; w = 1.d0
-    else
-      i = 1
-      do while (met(1,i+1) < tt)
-        i = i + 1
-      end do
-      w = (tt - met(1,i)) / max(met(1,i+1) - met(1,i), 1.d-30)
+      v = met(:,nmet)
+      return
     end if
-    if (nmet == 1) then
-      tk_o = met(2,1); rh_o = met(3,1); p_o = met(4,1); j_o = met(5,1); f_o = met(6,1)
-    else
-      tk_o = met(2,i) + w*(met(2,i+1)-met(2,i))
-      rh_o = met(3,i) + w*(met(3,i+1)-met(3,i))
-      p_o  = met(4,i) + w*(met(4,i+1)-met(4,i))
-      j_o  = met(5,i) + w*(met(5,i+1)-met(5,i))
-      f_o  = met(6,i) + w*(met(6,i+1)-met(6,i))
-    end if
+    i = 1
+    do while (met(1,i+1) < tt)
+      i = i + 1
+    end do
+    w = (tt - met(1,i)) / max(met(1,i+1) - met(1,i), 1.d-30)
+    v = met(:,i) + w * (met(:,i+1) - met(:,i))
   end subroutine met_at
 
   subroutine write_state(tt, tk_o, rh_o, p_o)
     double precision, intent(in) :: tt, tk_o, rh_o, p_o
-    write(iout,'(A,4ES16.8)') 'time', tt, tk_o, rh_o, p_o
+    write(iout,'(A,4ES17.8E3)') 'time', tt, tk_o, rh_o, p_o
     write(iout,'(A,I0)') 'number_m3 ', nbin
-    write(iout,'(5ES16.8)') num
+    write(iout,'(5ES17.8E3)') num
     write(iout,'(A,I0)') 'mass_ugm3 ', nbin*naer
-    write(iout,'(5ES16.8)') mass
+    write(iout,'(5ES17.8E3)') mass
     write(iout,'(A,I0)') 'gas_ugm3 ', ngas
-    write(iout,'(5ES16.8)') gas
+    write(iout,'(5ES17.8E3)') gas
   end subroutine write_state
 
 end program scram_box

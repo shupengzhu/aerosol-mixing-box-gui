@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import subprocess
 import time
 from pathlib import Path
@@ -28,6 +29,17 @@ def kernel_version(isorropia: str) -> str:
     return f.read_text() if f.exists() else "unknown"
 
 
+_FEXP = re.compile(r"(?<=\d)([+-]\d{3})$")
+
+
+def _num(tok: str) -> float:
+    """Fortran ES output drops the 'E' for 3-digit exponents (1.0-112); accept both."""
+    try:
+        return float(tok)
+    except ValueError:
+        return float(_FEXP.sub(r"E\1", tok))
+
+
 def read_output(path: str | Path, nsize: int, nfrac: int, naer: int, ngas: int) -> dict:
     nbin = nsize * nfrac
     times, met, num, mass, gas = [], [], [], [], []
@@ -40,13 +52,13 @@ def read_output(path: str | Path, nsize: int, nfrac: int, naer: int, ngas: int) 
                 continue
             key = parts[0]
             if key == "time":
-                times.append(float(parts[1]))
-                met.append([float(x) for x in parts[2:5]])
+                times.append(_num(parts[1]))
+                met.append([_num(x) for x in parts[2:5]])
             elif key in ("number_m3", "mass_ugm3", "gas_ugm3"):
                 n = int(parts[1])
                 vals = []
                 while len(vals) < n:
-                    vals += [float(x) for x in next(f).split()]
+                    vals += [_num(x) for x in next(f).split()]
                 a = np.array(vals)
                 if key == "number_m3":
                     num.append(a)
@@ -55,7 +67,7 @@ def read_output(path: str | Path, nsize: int, nfrac: int, naer: int, ngas: int) 
                 else:
                     gas.append(a)
             elif key == "cpu_s":
-                cpu = float(parts[1])
+                cpu = _num(parts[1])
     num = np.array(num).reshape(len(times), nsize, nfrac)
     mass = np.array(mass).reshape(len(times), nsize, nfrac, naer)
     return {"time_s": np.array(times), "met": np.array(met), "number_m3": num,
@@ -100,8 +112,14 @@ def run_case(user_case: dict, run_dir: str | Path, timeout_s: float = 7200) -> d
     np.savez_compressed(run / "results.npz", **{k: v for k, v in res.items() if v is not None})
     summary.update({"cpu_s": res["cpu_s"], "n_output": int(len(res["time_s"])),
                     "conservation_rel": conservation(res, g)})
+    out = {"case": c, "grid": g, "results": res, "summary": summary}
+    if any((c.get("postprocess") or {}).get(k, {}).get("enabled") for k in ("optics", "ccn", "hetchem")):
+        from .post import run_all
+        t1 = time.time()
+        out["post"] = run_all(out, c["postprocess"], run)
+        summary["post_wall_s"] = time.time() - t1
     (run / "summary.json").write_text(json.dumps(summary, indent=1, ensure_ascii=False))
-    return {"case": c, "grid": g, "results": res, "summary": summary}
+    return out
 
 
 def load_run(run_dir: str | Path) -> dict:
@@ -109,5 +127,8 @@ def load_run(run_dir: str | Path) -> dict:
     g = json.loads((run / "grid.json").read_text())
     data = np.load(run / "results.npz")
     res = {k: data[k] for k in data.files}
-    return {"case": json.loads((run / "case.resolved.json").read_text()), "grid": g,
-            "results": res, "summary": json.loads((run / "summary.json").read_text())}
+    out = {"case": json.loads((run / "case.resolved.json").read_text()), "grid": g,
+           "results": res, "summary": json.loads((run / "summary.json").read_text())}
+    if (run / "post.json").exists():
+        out["post"] = json.loads((run / "post.json").read_text())
+    return out

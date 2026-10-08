@@ -1,0 +1,75 @@
+{
+ "id": "tutorial_minimal",
+ "category": "teaching",
+ "name": {
+  "en": "Minimal tutorial (BC + sulfate coagulation)",
+  "zh": "最简教学案例（BC + 硫酸盐凝并）"
+ },
+ "summary": {
+  "en": "Fresh BC and aged sulfate populations coagulate for one hour; watch number move from the pure classes into mixed classes.",
+  "zh": "新鲜 BC 与老化硫酸盐两个颗粒群凝并 1 小时，观察数浓度从纯组分类群进入混合类群。"
+ },
+ "tags": [
+  "coagulation",
+  "BC",
+  "mixing state"
+ ],
+ "notes": [],
+ "case": {
+  "kernel": {
+   "isorropia": "none"
+  },
+  "environment": {
+   "temperature_K": 298.0,
+   "relative_humidity": 0.5
+  },
+  "time": {
+   "duration_s": 3600.0,
+   "dt_s": 300.0,
+   "output_every_s": 300.0
+  },
+  "mixing": {
+   "preset": "NC6"
+  },
+  "size_bins": {
+   "mode": "log",
+   "n": 8,
+   "dmin_um": 0.01,
+   "dmax_um": 2.5
+  },
+  "initial": {
+   "particles": {
+    "mode": "lognormal",
+    "modes": [
+     {
+      "name": "fresh BC",
+      "number_cm3": 20000,
+      "dg_um": 0.04,
+      "sigma_g": 1.6,
+      "mass_fraction": {
+       "PBC": 1.0
+      }
+     },
+     {
+      "name": "sulfate",
+      "number_cm3": 5000,
+      "dg_um": 0.12,
+      "sigma_g": 1.5,
+      "mass_fraction": {
+       "PSO4": 1.0
+      }
+     }
+    ]
+   }
+  },
+  "processes": {
+   "coagulation": true,
+   "condensation": false
+  },
+  "case": {
+   "name": "Minimal tutorial (BC + sulfate coagulation)",
+   "scenario_id": "tutorial_minimal",
+   "category": "teaching"
+  }
+ }
+}

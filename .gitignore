@@ -4,3 +4,4 @@ __pycache__/
 runs/
 kernel_build_*.log
 runs_before_fix/
+kernel/data/lut/*.nc

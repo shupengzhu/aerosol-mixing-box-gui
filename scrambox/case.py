@@ -15,7 +15,8 @@ DEFAULTS = {
              "reference": "", "derived_from": None},
     "kernel": {"isorropia": "v23", "crustal_speciation": "cmaq_aero6_7"},
     "environment": {"temperature_K": 298.0, "pressure_Pa": 101325.0, "relative_humidity": 0.70,
-                    "jno2_s1": 0.0, "time_series": None},
+                    "jno2_s1": 0.0, "time_series": None,
+                    "dilution": {"rate_s1": 0.0, "background": "initial"}},
     "time": {"duration_s": 43200.0, "dt_s": 600.0, "substep_s": None, "output_every_s": 600.0},
     "species": {"custom": []},
     "mixing": {"preset": "NC6", "external": True,
@@ -25,7 +26,7 @@ DEFAULTS = {
                   "bounds_um": [0.003, 0.01, 0.0398, 0.1585, 0.631, 2.5, 5.0, 10.0]},
     "initial": {"particles": {"mode": "lognormal", "modes": []}, "gas_ugm3": {}},
     "emissions": {"particles": {"mode": "lognormal", "modes": []}, "gas_ugm3_s": {},
-                  "time_profile": None},
+                  "time_profile": None, "gas_time_profile": None},
     "processes": {"coagulation": True, "condensation": True,
                   "nucleation": {"enabled": False, "model": "binary"},
                   "sulfate": "dynamic", "thermodynamics": "dynamic", "dynamic_solver": "etr",
@@ -116,6 +117,11 @@ def resolve(user_case: dict) -> dict:
         errs.append("environment.relative_humidity must be within [0, 1]")
     if float(e["pressure_Pa"]) <= 0:
         errs.append("environment.pressure_Pa must be > 0")
+    if float((e.get("dilution") or {}).get("rate_s1", 0.0)) < 0:
+        errs.append("environment.dilution.rate_s1 must be >= 0")
+    gp = c["emissions"].get("gas_time_profile")
+    if not (gp is None or gp == "jno2" or isinstance(gp, dict)):
+        errs.append("emissions.gas_time_profile must be null, 'jno2' or {time_s, factor}")
     if c["kernel"]["isorropia"] == "none" and c["processes"]["wet_diameter"] == "isorropia":
         # no-ISORROPIA runs diagnose water with kappa-Koehler; keep the CESM setting
         pass

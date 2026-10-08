@@ -1,0 +1,306 @@
+{
+ "id": "urban_plume_aging",
+ "category": "mixing_state",
+ "name": {
+  "en": "Urban plume aging",
+  "zh": "城市羽流老化"
+ },
+ "summary": {
+  "en": "Lagrangian urban air parcel from 06:00 for 24 h (after the PartMC urban-plume case): background Aitken and accumulation modes, diesel, gasoline and cooking emissions for 12 h, dilution with background air, photochemical production of sulfuric acid, nitric acid and SOA vapours following J_NO2. BC-containing particles age from fresh to coated.",
+  "zh": "仿照 PartMC urban plume 的拉格朗日城市气团，06:00 起 24 小时：背景 Aitken 与积聚模态，柴油车、汽油车与烹饪排放持续 12 小时，与背景空气稀释混合，硫酸、硝酸与 SOA 前体按 J_NO2 光化学生成。含 BC 颗粒由新鲜逐步被包覆老化。"
+ },
+ "tags": [
+  "urban",
+  "BC aging",
+  "mixing state",
+  "dilution",
+  "photochemistry"
+ ],
+ "notes": [
+  "Particle emission fluxes of the PartMC urban plume (m-2 s-1) divided by a 400 m mixing height; emissions stop after 12 h.",
+  "SCRAM has no gas-phase chemistry: the condensable vapours are prescribed sources scaled by J_NO2/max(J_NO2) (noon rates SULF 0.9, HNO3 1.8, SOA vapours 1.1 ug/m3/h).",
+  "Dilution 1.5e-5 1/s towards the initial (background) state."
+ ],
+ "case": {
+  "case": {
+   "reference": "Riemer, West, Zaveri and Easter (2009), JGR 114, D09202; PartMC scenarios/urban_plume",
+   "name": "Urban plume aging",
+   "scenario_id": "urban_plume_aging",
+   "category": "mixing_state"
+  },
+  "kernel": {
+   "isorropia": "v23"
+  },
+  "environment": {
+   "temperature_K": 290.0,
+   "pressure_Pa": 101325.0,
+   "relative_humidity": 0.8099999999999999,
+   "time_series": {
+    "time_s": [
+     0.0,
+     3600.0,
+     7200.0,
+     10800.0,
+     14400.0,
+     18000.0,
+     21600.0,
+     25200.0,
+     28800.0,
+     32400.0,
+     36000.0,
+     39600.0,
+     43200.0,
+     46800.0,
+     50400.0,
+     54000.0,
+     57600.0,
+     61200.0,
+     64800.0,
+     68400.0,
+     72000.0,
+     75600.0,
+     79200.0,
+     82800.0,
+     86400.0
+    ],
+    "temperature_K": [
+     290.0,
+     291.44708572938487,
+     293.0,
+     294.55291427061513,
+     296.0,
+     297.24264068711926,
+     298.19615242270663,
+     298.7955549577344,
+     299.0,
+     298.7955549577344,
+     298.19615242270663,
+     297.24264068711926,
+     296.0,
+     294.55291427061513,
+     293.0,
+     291.44708572938487,
+     290.0,
+     288.75735931288074,
+     287.80384757729337,
+     287.2044450422656,
+     287.0,
+     287.2044450422656,
+     287.80384757729337,
+     288.75735931288074,
+     290.0
+    ],
+    "relative_humidity": [
+     0.8099999999999999,
+     0.7569401899225545,
+     0.7,
+     0.6430598100774454,
+     0.59,
+     0.5444365081389595,
+     0.5094744111674234,
+     0.48749631821640493,
+     0.48,
+     0.48749631821640493,
+     0.5094744111674234,
+     0.5444365081389595,
+     0.59,
+     0.6430598100774454,
+     0.7,
+     0.7569401899225545,
+     0.8099999999999999,
+     0.8555634918610404,
+     0.8905255888325765,
+     0.912503681783595,
+     0.9199999999999999,
+     0.912503681783595,
+     0.8905255888325765,
+     0.8555634918610404,
+     0.8099999999999999
+    ],
+    "jno2_s1": [
+     0.0,
+     0.0013803368643070632,
+     0.0032490095854249413,
+     0.005098242509277048,
+     0.006635594036922036,
+     0.007647454443290808,
+     0.008,
+     0.007647454443290808,
+     0.0066355940369220365,
+     0.005098242509277049,
+     0.0032490095854249413,
+     0.0013803368643070654,
+     1.6500765570348698e-23,
+     0.0,
+     0.0,
+     0.0,
+     0.0,
+     0.0,
+     0.0,
+     0.0,
+     0.0,
+     0.0,
+     0.0,
+     0.0,
+     0.0
+    ]
+   },
+   "dilution": {
+    "rate_s1": 1.5e-05,
+    "background": "initial"
+   }
+  },
+  "time": {
+   "duration_s": 86400.0,
+   "dt_s": 600.0,
+   "output_every_s": 1800.0
+  },
+  "mixing": {
+   "preset": "NC6"
+  },
+  "size_bins": {
+   "mode": "log",
+   "n": 16,
+   "dmin_um": 0.005,
+   "dmax_um": 2.5
+  },
+  "initial": {
+   "particles": {
+    "mode": "lognormal",
+    "modes": [
+     {
+      "name": "background Aitken",
+      "number_cm3": 3200,
+      "dg_um": 0.02,
+      "sigma_g": 1.45,
+      "mass_fraction": {
+       "PSO4": 0.364,
+       "PNH4": 0.136,
+       "PSOA3P": 0.5
+      }
+     },
+     {
+      "name": "background accumulation",
+      "number_cm3": 2900,
+      "dg_um": 0.116,
+      "sigma_g": 1.65,
+      "mass_fraction": {
+       "PSO4": 0.364,
+       "PNH4": 0.136,
+       "PSOA3P": 0.5
+      }
+     }
+    ]
+   },
+   "gas_ugm3": {
+    "NH3": 5.0,
+    "HNO3": 1.0,
+    "SOA3P": 0.5,
+    "SOA4P": 1.0,
+    "SOA5P": 2.0
+   }
+  },
+  "emissions": {
+   "particles": {
+    "mode": "lognormal",
+    "modes": [
+     {
+      "name": "diesel",
+      "number_cm3_s": 0.4,
+      "dg_um": 0.05,
+      "sigma_g": 1.7,
+      "mass_fraction": {
+       "PBC": 0.7,
+       "PPOAlP": 0.3
+      }
+     },
+     {
+      "name": "gasoline",
+      "number_cm3_s": 0.125,
+      "dg_um": 0.05,
+      "sigma_g": 1.7,
+      "mass_fraction": {
+       "PBC": 0.2,
+       "PPOAlP": 0.8
+      }
+     },
+     {
+      "name": "meat cooking",
+      "number_cm3_s": 0.0225,
+      "dg_um": 0.086,
+      "sigma_g": 1.9,
+      "mass_fraction": {
+       "PPOAlP": 1.0
+      }
+     }
+    ]
+   },
+   "gas_ugm3_s": {
+    "SULF": 0.00025,
+    "HNO3": 0.0005,
+    "SOA1P": 1.5e-05,
+    "SOA2P": 3e-05,
+    "SOA3P": 4.5e-05,
+    "SOA4P": 9e-05,
+    "SOA5P": 0.00012
+   },
+   "time_profile": {
+    "time_s": [
+     0.0,
+     3600.0,
+     7200.0,
+     10800.0,
+     14400.0,
+     18000.0,
+     21600.0,
+     25200.0,
+     28800.0,
+     32400.0,
+     36000.0,
+     39600.0,
+     43200.0,
+     46800.0,
+     50400.0,
+     54000.0,
+     57600.0,
+     61200.0,
+     64800.0,
+     68400.0,
+     72000.0,
+     75600.0,
+     79200.0,
+     82800.0,
+     86400.0
+    ],
+    "factor": [
+     1.0,
+     1.0,
+     1.0,
+     1.0,
+     1.0,
+     1.0,
+     1.0,
+     1.0,
+     1.0,
+     1.0,
+     1.0,
+     1.0,
+     0.0,
+     0.0,
+     0.0,
+     0.0,
+     0.0,
+     0.0,
+     0.0,
+     0.0,
+     0.0,
+     0.0,
+     0.0,
+     0.0,
+     0.0
+    ]
+   },
+   "gas_time_profile": "jno2"
+  }
+ }
+}

@@ -1,0 +1,131 @@
+{
+ "id": "seasalt_nitrate",
+ "category": "mixing_state",
+ "name": {
+  "en": "Sea salt + nitrate (chloride depletion)",
+  "zh": "海盐 + 硝酸盐（氯亏损）"
+ },
+ "summary": {
+  "en": "Coastal air: fresh sea spray (CMAQ sea-salt speciation) meets polluted continental air with ammonium sulfate particles and nitric acid. HNO3 displaces chloride from sea salt (NaCl + HNO3 -> NaNO3 + HCl); ISORROPIA II also sees the sea-salt Ca, K, Mg.",
+  "zh": "沿海气团：新鲜海盐（CMAQ 海盐组分）与含硫酸铵颗粒和硝酸的污染大陆气团混合。HNO3 置换海盐中的 氯（NaCl + HNO3 -> NaNO3 + HCl）；ISORROPIA II 同时考虑海盐中的 Ca、K、Mg。"
+ },
+ "tags": [
+  "sea salt",
+  "nitrate",
+  "chloride depletion",
+  "ISORROPIA II"
+ ],
+ "notes": [
+  "Sea-salt composition as emitted by CESM-SCRAM (PNA 0.3866, PHCL 0.6134). Ca, K and Mg are not tracers: the v2.3 kernel derives them from Na with the CMAQ ratios (kernel/data/speciation_cmaq_aero.json); v1 and no-ISORROPIA ignore them.",
+  "Run with kernel v1 and v23 to see the effect of the crustal cations."
+ ],
+ "case": {
+  "case": {
+   "reference": "CESM-SCRAM sea-salt split; CMAQ v5.5 AERO_DATA sea_spc cation ratios",
+   "name": "Sea salt + nitrate (chloride depletion)",
+   "scenario_id": "seasalt_nitrate",
+   "category": "mixing_state"
+  },
+  "kernel": {
+   "isorropia": "v23"
+  },
+  "environment": {
+   "temperature_K": 293.0,
+   "pressure_Pa": 101325.0,
+   "relative_humidity": 0.8,
+   "time_series": {
+    "time_s": [
+     0.0,
+     3600.0,
+     7200.0,
+     10800.0,
+     14400.0,
+     18000.0,
+     21600.0,
+     25200.0,
+     28800.0,
+     32400.0,
+     36000.0,
+     39600.0,
+     43200.0
+    ],
+    "jno2_s1": [
+     0.005806144782306781,
+     0.006691522637879458,
+     0.007,
+     0.006691522637879458,
+     0.005806144782306782,
+     0.004460962195617418,
+     0.0028428833872468236,
+     0.001207794756268682,
+     1.443816987405511e-23,
+     0.0,
+     0.0,
+     0.0,
+     0.0
+    ]
+   }
+  },
+  "time": {
+   "duration_s": 43200.0,
+   "dt_s": 600.0,
+   "output_every_s": 1800.0
+  },
+  "mixing": {
+   "preset": "NC6"
+  },
+  "size_bins": {
+   "mode": "log",
+   "n": 14,
+   "dmin_um": 0.01,
+   "dmax_um": 10.0
+  },
+  "initial": {
+   "particles": {
+    "mode": "lognormal",
+    "modes": [
+     {
+      "name": "sea salt film/jet",
+      "number_cm3": 30,
+      "dg_um": 0.25,
+      "sigma_g": 2.0,
+      "mass_fraction": {
+       "PNA": 0.3866,
+       "PHCL": 0.6134
+      }
+     },
+     {
+      "name": "sea salt coarse",
+      "number_cm3": 3,
+      "dg_um": 1.5,
+      "sigma_g": 2.0,
+      "mass_fraction": {
+       "PNA": 0.3866,
+       "PHCL": 0.6134
+      }
+     },
+     {
+      "name": "continental sulfate",
+      "number_cm3": 1500,
+      "dg_um": 0.08,
+      "sigma_g": 1.6,
+      "mass_fraction": {
+       "PSO4": 0.727,
+       "PNH4": 0.273
+      }
+     }
+    ]
+   },
+   "gas_ugm3": {
+    "HNO3": 4.0,
+    "NH3": 0.5
+   }
+  },
+  "emissions": {
+   "gas_ugm3_s": {
+    "HNO3": 0.0002
+   },
+   "gas_time_profile": "jno2"
+  }
+ }
+}

@@ -85,6 +85,53 @@ def particles_to_sections(spec: dict, g: dict, rate: bool, where: str):
                 mdry = vb[b] * rho * UGUM3_PER_GCM3                 # ug/m3
                 for s, f in fr.items():
                     mass[j, table.aerosol.index(s)] += mdry * f
+    elif mode == "bin_mass":
+        # mass per species and size bin (ug/m3[/s]); number per bin optional (else from
+        # the dry volume at the geometric mid diameter). "mixing": "internal" puts each
+        # bin into the class of its total composition; "by_group" makes one population
+        # per species group, "by_group_set" one per listed species set ("sets"), each in
+        # the class of its own composition with the number split by volume (the legacy
+        # SCRAM external start).
+        key_m = "mass_ugm3_s" if rate else "mass_ugm3"
+        masses = {s: np.asarray(v, dtype=float) for s, v in spec[key_m].items()}
+        for s, v in masses.items():
+            if s not in table.aerosol or s == "PH2O":
+                raise ValueError(f"{where}.{key_m}: unknown or non-dry species '{s}'")
+            if v.shape != (nsize,):
+                raise ValueError(f"{where}.{key_m}.{s} needs {nsize} values")
+        nin = spec.get(key_n)
+        nin = None if nin is None else np.asarray(nin, dtype=float) * 1e6
+        how = spec.get("mixing", "internal")
+        if how == "internal":
+            sets = [list(masses)]
+        elif how == "by_group":
+            sets = [[s for s in masses if table.group_of.get(s) == gname] for gname in table.groups]
+        elif how == "by_group_set":
+            sets = [[s for s in st if s in masses] for st in spec["sets"]]
+            missing = set(masses) - {s for st in sets for s in st}
+            if missing:
+                raise ValueError(f"{where}.sets does not cover {sorted(missing)}")
+        else:
+            raise ValueError(f"{where}.mixing must be 'internal', 'by_group' or 'by_group_set'")
+        for b in range(nsize):
+            dmid = math.sqrt(bounds[b] * bounds[b + 1])
+            vol = {s: v[b] / (table.density_gcm3(s) * UGUM3_PER_GCM3) for s, v in masses.items()}
+            vtot = sum(vol.values())
+            if vtot <= 0:
+                continue
+            ntot = nin[b] if nin is not None else vtot / (math.pi / 6 * dmid ** 3)
+            parts = []
+            for members in sets:
+                vs = sum(vol[s] for s in members)
+                ms = sum(masses[s][b] for s in members)
+                if vs > 0:
+                    fr = {s: masses[s][b] / ms for s in members}
+                    parts.append((grid.find_class(_group_fractions(fr, table), classes), members, vs / vtot))
+            for cls, members, share in parts:
+                j = b * nfrac + cls
+                number[j] += ntot * share
+                for s in members:
+                    mass[j, table.aerosol.index(s)] += masses[s][b]
     elif mode == "table":
         n = np.asarray(spec[key_n], dtype=float)               # (nclass, nsize) #/cm3
         if n.shape != (nfrac, nsize):
@@ -103,7 +150,7 @@ def particles_to_sections(spec: dict, g: dict, rate: bool, where: str):
                 for s, f in fr.items():
                     mass[j, table.aerosol.index(s)] += mdry * f
     else:
-        raise ValueError(f"{where}.mode must be 'lognormal' or 'table'")
+        raise ValueError(f"{where}.mode must be 'lognormal', 'bin_mass' or 'table'")
     return number, mass, notes
 
 
@@ -117,24 +164,42 @@ def gas_vector(values: dict, table: sp.SpeciesTable, where: str) -> np.ndarray:
 
 
 def met_table(c: dict) -> np.ndarray:
-    """Rows: t, T, RH, P, J_NO2, emission factor (union of the time axes)."""
-    e, prof = c["environment"], c["emissions"].get("time_profile")
+    """Rows: t, T, RH, P, J_NO2, particle emission factor, gas source factor,
+    dilution rate (1/s), on the union of all time axes."""
+    e, em = c["environment"], c["emissions"]
+    prof, gprof = em.get("time_profile"), em.get("gas_time_profile")
     ts = e.get("time_series") or {}
-    times = sorted(set([0.0] + [float(x) for x in ts.get("time_s", [])] +
-                       ([float(x) for x in prof["time_s"]] if prof else [])))
+    axes = [0.0] + [float(x) for x in ts.get("time_s", [])]
+    for p in (prof, gprof):
+        if isinstance(p, dict):
+            axes += [float(x) for x in p["time_s"]]
+    times = sorted(set(axes))
 
     def series(name, const):
         if ts.get(name) is not None and ts.get("time_s"):
             return lambda t: float(np.interp(t, ts["time_s"], ts[name]))
         return lambda t: float(const)
 
+    def profile(p):
+        if isinstance(p, dict):
+            return lambda t: float(np.interp(t, p["time_s"], p["factor"]))
+        return lambda t: 1.0
+
     f_t = series("temperature_K", e["temperature_K"])
     f_rh = series("relative_humidity", e["relative_humidity"])
     f_p = series("pressure_Pa", e["pressure_Pa"])
     f_j = series("jno2_s1", e.get("jno2_s1", 0.0))
-    f_e = (lambda t: float(np.interp(t, prof["time_s"], prof["factor"]))) if prof else (lambda t: 1.0)
-    return np.array([[t, f_t(t), min(max(f_rh(t), 0.0), 1.0), f_p(t), max(f_j(t), 0.0), f_e(t)]
-                     for t in times]).T
+    f_k = series("dilution_s1", (e.get("dilution") or {}).get("rate_s1", 0.0))
+    f_e = profile(prof)
+    if gprof == "jno2":                       # photochemical production proxy
+        jmax = max([f_j(t) for t in times] + [1e-30])
+        f_g = lambda t: f_j(t) / jmax
+    elif gprof is None:
+        f_g = f_e
+    else:
+        f_g = profile(gprof)
+    return np.array([[t, f_t(t), min(max(f_rh(t), 0.0), 1.0), f_p(t), max(f_j(t), 0.0),
+                      f_e(t), f_g(t), max(f_k(t), 0.0)] for t in times]).T
 
 
 def _block(name, arr) -> str:
@@ -159,6 +224,14 @@ def compile_case(user_case: dict, run_dir: str | Path) -> dict:
     gas0 = gas_vector(c["initial"].get("gas_ugm3"), table, "initial.gas_ugm3")
     gsrc = gas_vector(c["emissions"].get("gas_ugm3_s"), table, "emissions.gas_ugm3_s")
     met = met_table(c)
+    bg = (c["environment"].get("dilution") or {}).get("background", "initial")
+    if bg in (None, "initial"):
+        nb, mb, gb = n0, m0, gas0
+    else:
+        nb, mb, notes2 = particles_to_sections(bg.get("particles") or {"modes": []}, g, False,
+                                               "environment.dilution.background.particles")
+        notes0 = notes0 + notes2
+        gb = gas_vector(bg.get("gas_ugm3"), table, "environment.dilution.background.gas_ugm3")
 
     # species tables: the wrapper appends _noiso to the file name when ISORROPIA is off
     sp.write_species_file(table, run / "scram_species.dat")
@@ -232,7 +305,10 @@ def compile_case(user_case: dict, run_dir: str | Path) -> dict:
         f.write(_block("emis_number_m3s", ne))
         f.write(_block("emis_mass_ugm3s", me))
         f.write(_block("gas_source_ugm3s", gsrc))
-        f.write(f"met 6 {met.shape[1]}\n")
+        f.write(_block("bg_number_m3", nb))
+        f.write(_block("bg_mass_ugm3", mb))
+        f.write(_block("bg_gas_ugm3", gb))
+        f.write(f"met {met.shape[0]} {met.shape[1]}\n")
         for col in met.T:
             f.write(" ".join(f"{x:.10e}" for x in col) + "\n")
 
