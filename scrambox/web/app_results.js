@@ -299,8 +299,13 @@ function renderRunListOnly() {
 
 async function init() {
   document.documentElement.dataset.theme = localStorage.getItem("sb_theme") || (matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light");
-  $("#themeBtn").onclick = () => { const v = document.documentElement.dataset.theme === "dark" ? "light" : "dark"; document.documentElement.dataset.theme = v; localStorage.setItem("sb_theme", v); render(); };
-  document.querySelectorAll("#langSeg button").forEach(b => b.onclick = () => { S.lang = b.dataset.lang; localStorage.setItem("sb_lang", S.lang); document.documentElement.lang = S.lang === "zh" ? "zh-CN" : "en"; render(); });
+  $("#themeBtn").onclick = () => { const v = document.documentElement.dataset.theme === "dark" ? "light" : "dark"; document.documentElement.dataset.theme = v; localStorage.setItem("sb_theme", v); if (S.meta) render(); };
+  document.querySelectorAll("#langSeg button").forEach(b => b.onclick = () => { S.lang = b.dataset.lang; localStorage.setItem("sb_lang", S.lang); document.documentElement.lang = S.lang === "zh" ? "zh-CN" : "en";
+    if (S.meta) render(); else { document.querySelectorAll("[data-t]").forEach(e => e.textContent = t(e.dataset.t)); document.querySelectorAll("#langSeg button").forEach(x => x.classList.toggle("on", x.dataset.lang === S.lang)); showLogin(); } });
+  const sess = await api("session");
+  S.user = sess.user;
+  if (sess.mode === "shared" && !sess.user) { renderTabs(); $("#tabs").innerHTML = ""; return showLogin(); }
+  userChip();
   S.meta = await api("meta");
   await reloadScenarios();
   await refreshRuns().catch(() => {});

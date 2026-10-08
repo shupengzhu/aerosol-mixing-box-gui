@@ -28,8 +28,10 @@ CATEGORIES = {
 }
 
 
-def user_dir() -> Path:
-    base = Path(os.environ.get("SCRAMBOX_USER_DIR", Path.home() / ".scrambox"))
+def user_dir(base: str | Path | None = None) -> Path:
+    """Saved scenarios of one user; base = that user's data directory (the server gives
+    each signed-in user their own), default SCRAMBOX_USER_DIR or ~/.scrambox."""
+    base = Path(base) if base else Path(os.environ.get("SCRAMBOX_USER_DIR", Path.home() / ".scrambox"))
     d = base / "scenarios"
     d.mkdir(parents=True, exist_ok=True)
     return d
@@ -41,28 +43,28 @@ def _read(path: Path, builtin: bool) -> dict:
     return s
 
 
-def all_scenarios() -> list[dict]:
+def all_scenarios(base=None) -> list[dict]:
     out = [_read(p, True) for p in sorted(BUILTIN_DIR.glob("*.json"))]
-    out += [_read(p, False) for p in sorted(user_dir().glob("*.json"))]
+    out += [_read(p, False) for p in sorted(user_dir(base).glob("*.json"))]
     order = list(CATEGORIES)
     out.sort(key=lambda s: (order.index(s.get("category", "custom"))
                             if s.get("category") in order else 99, s["id"]))
     return out
 
 
-def index() -> list[dict]:
+def index(base=None) -> list[dict]:
     return [{k: s.get(k) for k in ("id", "category", "name", "summary", "tags", "builtin")}
-            for s in all_scenarios()]
+            for s in all_scenarios(base)]
 
 
-def get(sid: str) -> dict:
-    for s in all_scenarios():
+def get(sid: str, base=None) -> dict:
+    for s in all_scenarios(base):
         if s["id"] == sid:
             return s
     raise KeyError(sid)
 
 
-def save_user(scn: dict) -> dict:
+def save_user(scn: dict, base=None) -> dict:
     """Save (or overwrite) a user scenario; built-in ids cannot be overwritten."""
     sid = re.sub(r"[^A-Za-z0-9_-]+", "_", scn.get("id") or scn["name"]["en"]).strip("_").lower()
     if not sid:
@@ -76,13 +78,15 @@ def save_user(scn: dict) -> dict:
          "tags": scn.get("tags", []), "notes": scn.get("notes", []),
          "derived_from": scn.get("derived_from"), "case": scn["case"]}
     s["case"].setdefault("case", {}).update({"scenario_id": sid, "category": "custom"})
-    (user_dir() / f"{sid}.json").write_text(json.dumps(s, indent=1, ensure_ascii=False), encoding="utf-8")
+    (user_dir(base) / f"{sid}.json").write_text(json.dumps(s, indent=1, ensure_ascii=False), encoding="utf-8")
     s["builtin"] = False
     return s
 
 
-def delete_user(sid: str) -> None:
-    p = user_dir() / f"{sid}.json"
+def delete_user(sid: str, base=None) -> None:
+    if not re.fullmatch(r"[A-Za-z0-9_-]{1,80}", sid or ""):
+        raise KeyError(sid)
+    p = user_dir(base) / f"{sid}.json"
     if not p.exists():
         raise KeyError(sid)
     p.unlink()

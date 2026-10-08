@@ -51,8 +51,39 @@ function toast(msg, ms = 2600) {
 async function api(path, method = "GET", body) {
   const r = await fetch("/api/" + path, { method, headers: { "Content-Type": "application/json" }, body: body ? JSON.stringify(body) : undefined });
   const j = await r.json().catch(() => ({ error: r.statusText }));
+  if (r.status === 401 && j.login && path !== "login") { showLogin(); throw new Error(j.error); }
   if (!r.ok) throw new Error(j.error || r.statusText);
   return j;
+}
+
+// ------------------------------------------------------------------ sign-in (shared server)
+function showLogin(msg) {
+  const main = document.querySelector("main");
+  $("#tabs").innerHTML = "";
+  const code = h("input", { type: "password", placeholder: t("access_code"), autocomplete: "current-password" });
+  const name = h("input", { type: "text", placeholder: t("your_name"), value: localStorage.getItem("sb_name") || "", autocomplete: "username" });
+  const err = h("div", { class: "banner err", style: { display: msg ? "" : "none" } }, msg || "");
+  const go = async () => {
+    try {
+      const r = await api("login", "POST", { code: code.value, name: name.value });
+      localStorage.setItem("sb_name", name.value.trim());
+      S.user = r.user; location.reload();
+    } catch (e) { err.textContent = e.message; err.style.display = ""; }
+  };
+  [code, name].forEach(i => i.addEventListener("keydown", ev => { if (ev.key === "Enter") go(); }));
+  main.innerHTML = "";
+  main.append(h("div", { class: "card", style: { maxWidth: "440px", margin: "60px auto" } },
+    h("h2", {}, t("sign_in")), h("p", { class: "sub" }, t("sign_in_hint")), err,
+    h("div", { class: "fields", style: { gridTemplateColumns: "1fr" } }, field(t("access_code"), code), field(t("your_name"), name, t("name_hint"))),
+    h("div", { class: "row", style: { marginTop: "14px", justifyContent: "flex-end" } }, h("button", { class: "btn primary", onclick: go }, t("sign_in")))));
+}
+
+function userChip() {
+  const host = document.querySelector(".top-actions");
+  const old = $("#userChip"); if (old) old.remove();
+  if (!S.user) return;
+  host.prepend(h("span", { id: "userChip", class: "chip", title: t("workspace_hint") }, "👤 " + S.user,
+    h("button", { class: "btn ghost sm", style: { height: "20px", padding: "0 4px" }, onclick: async () => { await api("logout", "POST", {}); location.reload(); } }, t("sign_out"))));
 }
 const debounce = (fn, ms) => { let id; return (...a) => { clearTimeout(id); id = setTimeout(() => fn(...a), ms); }; };
 

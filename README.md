@@ -31,6 +31,20 @@ python3 -m scrambox classes --preset NC11
 
 User data (runs, experiment sets, saved scenarios) go to `SCRAMBOX_USER_DIR` (default `~/.scrambox`).
 
+## Shared server
+
+With an access code the server asks every user to sign in (access code + name) and keeps a
+separate workspace per name, with compute limits (`SCRAMBOX_MAX_ACTIVE`, `SCRAMBOX_MAX_COST`,
+`SCRAMBOX_MAX_VARIANTS`, `SCRAMBOX_RUN_TIMEOUT`). `tools/service.sh` runs it persistently on
+127.0.0.1 (cron watchdog, no root); publish it through an HTTPS reverse proxy, e.g.
+
+```bash
+tools/service.sh set-code <code> && tools/service.sh start && tools/service.sh install-cron
+sudo tailscale funnel --bg 8765
+```
+
+User guide (Chinese): [docs/使用说明.md](docs/使用说明.md).
+
 ## Standalone package
 
 `bash tools/package_standalone.sh` writes `dist/scram-box-<date>.tar.gz` with statically linked

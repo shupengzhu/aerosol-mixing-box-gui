@@ -1,36 +1,37 @@
-"""Local web interface: python -m scrambox serve [--port 8765] [--host 127.0.0.1]
+"""Web interface server: python -m scrambox serve [--port 8765] [--host 127.0.0.1]
 
 Standard-library HTTP server with a JSON API and a static single-page front end
-(scrambox/web). On a shared server every user starts their own instance (their runs and
-saved scenarios live in SCRAMBOX_USER_DIR, default ~/.scrambox) and reaches it through an
-ssh tunnel:  ssh -L 8765:localhost:8765 <server>.
+(scrambox/web). Two modes:
 
-API
-  GET    /api/meta                     enums, defaults, species tables, kernels
-  GET    /api/scenarios                scenario index;  GET /api/scenarios/<id>  full scenario
-  POST   /api/scenarios                save a user scenario;  DELETE /api/scenarios/<id>
-  POST   /api/describe                 information panel for a case
-  POST   /api/grid                     sections, classes and labels for a case
-  POST   /api/runs                     start a run {case, name?} -> {id}
-  GET    /api/runs                     list;  GET /api/runs/<id>  status;  DELETE /api/runs/<id>
-  GET    /api/runs/<id>/results        arrays for the result views (+ post-processing)
-  POST   /api/runs/<id>/post           (re)run post-processing with options
-  GET    /api/runs/<id>/case           the resolved case of a run
-  POST   /api/experiments              start an experiment set;  GET /api/experiments
-  GET    /api/experiments/<id>         status and comparison metrics
+  local   no access code configured: one user, data in SCRAMBOX_USER_DIR (~/.scrambox)
+  shared  an access code is set (SCRAMBOX_ACCESS_CODE or the file <data>/access_code):
+          users sign in with the code and a name; each name gets its own workspace
+          <data>/users/<id>/ (runs, experiment sets, saved scenarios); compute limits apply.
+          Meant to sit behind an HTTPS reverse proxy (e.g. tailscale funnel) on 127.0.0.1.
+
+API (all under /api, JSON)
+  GET  session | meta | scenarios | scenarios/<id> | runs | runs/<id> | runs/<id>/results
+       runs/<id>/case | experiments | experiments/<id>
+  POST login {code, name} | logout | describe | grid | resolve | scenarios | runs {case, name}
+       runs/<id>/post | experiments
+  DELETE scenarios/<id> | runs/<id> | experiments/<id>
 """
 from __future__ import annotations
 
+import hashlib
+import hmac
 import json
 import mimetypes
 import os
 import re
+import secrets
 import shutil
 import threading
 import time
 import traceback
 import uuid
 from concurrent.futures import ThreadPoolExecutor
+from http.cookies import SimpleCookie
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import unquote, urlparse
@@ -42,30 +43,137 @@ from . import scenarios as scn
 from . import species as spmod
 
 WEB = Path(__file__).resolve().parent / "web"
-POOL = ThreadPoolExecutor(max_workers=int(os.environ.get("SCRAMBOX_WORKERS", "4")))
+POOL = ThreadPoolExecutor(max_workers=int(os.environ.get("SCRAMBOX_WORKERS", "6")))
 LOCK = threading.Lock()
 
+# limits (shared mode)
+MAX_BODY = 8 * 1024 * 1024
+MAX_ACTIVE_PER_USER = int(os.environ.get("SCRAMBOX_MAX_ACTIVE", "3"))
+MAX_COST = float(os.environ.get("SCRAMBOX_MAX_COST", "2e7"))      # kernel calls x sections
+MAX_VARIANTS = int(os.environ.get("SCRAMBOX_MAX_VARIANTS", "10"))
+RUN_TIMEOUT_S = float(os.environ.get("SCRAMBOX_RUN_TIMEOUT", "3600"))
+SESSION_DAYS = 30
 
-def user_dir() -> Path:
+
+# ------------------------------------------------------------------ data locations
+def data_dir() -> Path:
     d = Path(os.environ.get("SCRAMBOX_USER_DIR", Path.home() / ".scrambox"))
     d.mkdir(parents=True, exist_ok=True)
     return d
 
 
-def runs_dir() -> Path:
-    d = user_dir() / "runs"
-    d.mkdir(exist_ok=True)
-    return d
+def access_code() -> str | None:
+    code = os.environ.get("SCRAMBOX_ACCESS_CODE")
+    f = data_dir() / "access_code"
+    if not code and f.exists():
+        code = f.read_text().strip()
+    return code or None
 
 
-def exps_dir() -> Path:
-    d = user_dir() / "experiments"
-    d.mkdir(exist_ok=True)
-    return d
+def shared_mode() -> bool:
+    return access_code() is not None
 
 
+class Workspace:
+    """Directory tree of one user (or of the single local user)."""
+
+    def __init__(self, root: Path, user: str | None = None):
+        self.root, self.user = root, user
+        root.mkdir(parents=True, exist_ok=True)
+
+    @property
+    def runs(self) -> Path:
+        d = self.root / "runs"
+        d.mkdir(exist_ok=True)
+        return d
+
+    @property
+    def exps(self) -> Path:
+        d = self.root / "experiments"
+        d.mkdir(exist_ok=True)
+        return d
+
+
+def user_slug(name: str) -> str:
+    ascii_part = re.sub(r"[^A-Za-z0-9]+", "_", name).strip("_")[:24]
+    return (ascii_part + "_" if ascii_part else "u_") + hashlib.sha1(name.encode("utf-8")).hexdigest()[:8]
+
+
+# ------------------------------------------------------------------ sessions
+_SESS_LOCK = threading.Lock()
+_FAILS: dict[str, list[float]] = {}
+
+
+def _sessions_file() -> Path:
+    return data_dir() / "sessions.json"
+
+
+def _load_sessions() -> dict:
+    f = _sessions_file()
+    try:
+        return json.loads(f.read_text()) if f.exists() else {}
+    except Exception:                                   # noqa: BLE001
+        return {}
+
+
+def _save_sessions(s: dict) -> None:
+    f = _sessions_file()
+    tmp = f.with_suffix(".tmp")
+    tmp.write_text(json.dumps(s))
+    os.chmod(tmp, 0o600)
+    tmp.replace(f)
+
+
+def login(code: str, name: str, ip: str) -> str:
+    now = time.time()
+    with _SESS_LOCK:
+        fails = [t for t in _FAILS.get(ip, []) if now - t < 600]
+        if len(fails) >= 10:
+            raise PermissionError("too many failed attempts, try again in 10 minutes")
+        ok = hmac.compare_digest((code or "").strip().encode(), (access_code() or "").encode())
+        name = (name or "").strip()
+        if not ok:
+            _FAILS[ip] = fails + [now]
+            raise PermissionError("wrong access code")
+        if not (1 <= len(name) <= 32) or not re.fullmatch(r"[\w .@-]+", name):
+            raise ValueError("name: 1-32 letters, digits, Chinese characters, space . @ - _")
+        token = secrets.token_hex(24)
+        s = {k: v for k, v in _load_sessions().items() if now - v.get("t", 0) < SESSION_DAYS * 86400}
+        s[token] = {"user": name, "t": now}
+        _save_sessions(s)
+    ws = workspace_for(name)
+    prof = ws.root / "profile.json"
+    if not prof.exists():
+        prof.write_text(json.dumps({"name": name, "created": now}, ensure_ascii=False))
+    return token
+
+
+def logout(token: str | None) -> None:
+    with _SESS_LOCK:
+        s = _load_sessions()
+        if token in s:
+            del s[token]
+            _save_sessions(s)
+
+
+def session_user(token: str | None) -> str | None:
+    if not token:
+        return None
+    v = _load_sessions().get(token)
+    if not v or time.time() - v.get("t", 0) > SESSION_DAYS * 86400:
+        return None
+    return v["user"]
+
+
+def workspace_for(user: str | None) -> Workspace:
+    if user is None:
+        return Workspace(data_dir())
+    return Workspace(data_dir() / "users" / user_slug(user), user)
+
+
+# ------------------------------------------------------------------ helpers
 def _safe_id(s: str) -> str:
-    if not re.fullmatch(r"[A-Za-z0-9_.-]{1,80}", s or ""):
+    if not re.fullmatch(r"[A-Za-z0-9_.-]{1,80}", s or "") or s.startswith("."):
         raise KeyError(s)
     return s
 
@@ -81,6 +189,40 @@ def _round(a, sig=5):
         mag = np.where(a != 0, np.floor(np.log10(np.abs(a))), 0)
     f = 10.0 ** (sig - 1 - mag)
     return (np.round(a * f) / f).tolist()
+
+
+def check_cost(case: dict) -> dict:
+    """Validate a case and estimate its kernel cost; raise ValueError beyond the limit."""
+    from .compile import build_grid
+    c = casemod.resolve(case)
+    g = build_grid(c)
+    sections = (len(g["bounds_um"]) - 1) * len(g["classes"])
+    calls = c["time"]["duration_s"] / c["time"]["substep_s"]
+    cost = calls * sections
+    if shared_mode() and cost > MAX_COST:
+        raise ValueError(f"run too large for the shared server: {calls:.0f} kernel calls x {sections} sections "
+                         f"= {cost:.2e} > {MAX_COST:.0e}; shorten the run, enlarge the sub-step or use fewer "
+                         f"bins/classes (or install the standalone package)")
+    return {"calls": calls, "sections": sections, "cost": cost}
+
+
+def _active_jobs(ws: Workspace) -> int:
+    n = 0
+    for base in (ws.runs, ws.exps):
+        for d in base.iterdir():
+            f = d / "status.json"
+            if f.exists():
+                try:
+                    if json.loads(f.read_text()).get("state") in ("queued", "running"):
+                        n += 1
+                except Exception:                       # noqa: BLE001
+                    pass
+    return n
+
+
+def _check_quota(ws: Workspace):
+    if shared_mode() and _active_jobs(ws) >= MAX_ACTIVE_PER_USER:
+        raise ValueError(f"at most {MAX_ACTIVE_PER_USER} runs or experiment sets at a time; wait for one to finish")
 
 
 # ------------------------------------------------------------------ meta
@@ -107,7 +249,9 @@ def meta() -> dict:
                                for k, v in PRESETS.items()},
             "post_defaults": {"optics": optics.DEFAULTS, "ccn": ccn.DEFAULTS,
                               "hetchem": hetchem.DEFAULTS, "gamma_cesm": hetchem.GAMMA_CESM},
-            "experiment_dimensions": PRESET_DIMENSIONS}
+            "experiment_dimensions": PRESET_DIMENSIONS,
+            "limits": ({"max_cost": MAX_COST, "max_active": MAX_ACTIVE_PER_USER, "max_variants": MAX_VARIANTS}
+                       if shared_mode() else None)}
 
 
 def grid_info(case: dict) -> dict:
@@ -126,6 +270,8 @@ def grid_info(case: dict) -> dict:
 # ------------------------------------------------------------------ runs
 def _status(run: Path) -> dict:
     f = run / "status.json"
+    if not run.is_dir():
+        raise KeyError(run.name)
     st = json.loads(f.read_text()) if f.exists() else {"state": "unknown"}
     if st.get("state") == "running":
         out = run / "output.txt"
@@ -146,10 +292,11 @@ def _write_status(run: Path, **kw):
     f.write_text(json.dumps(st, indent=1))
 
 
-def start_run(case: dict, name: str | None = None) -> str:
-    casemod.resolve(case)                        # validate before queueing
+def start_run(ws: Workspace, case: dict, name: str | None = None) -> str:
+    check_cost(case)
+    _check_quota(ws)
     rid = _new_id(name or case.get("case", {}).get("name", "run"))
-    run = runs_dir() / rid
+    run = ws.runs / rid
     run.mkdir()
     (run / "case.json").write_text(json.dumps(case, indent=1, ensure_ascii=False))
     _write_status(run, state="queued", name=name or case.get("case", {}).get("name", ""), created=time.time())
@@ -158,7 +305,7 @@ def start_run(case: dict, name: str | None = None) -> str:
         from .run import run_case
         _write_status(run, state="running", started=time.time())
         try:
-            out = run_case(case, run)
+            out = run_case(case, run, timeout_s=RUN_TIMEOUT_S)
             _write_status(run, state="done", finished=time.time(), cpu_s=out["summary"]["cpu_s"])
         except Exception as e:                  # noqa: BLE001
             _write_status(run, state="error", finished=time.time(), error=str(e)[-1500:])
@@ -166,18 +313,18 @@ def start_run(case: dict, name: str | None = None) -> str:
     return rid
 
 
-def list_runs() -> list[dict]:
+def list_runs(ws: Workspace) -> list[dict]:
     out = []
-    for d in sorted(runs_dir().iterdir(), reverse=True):
+    for d in sorted(ws.runs.iterdir(), reverse=True):
         if d.is_dir():
             st = _status(d)
             out.append({"id": d.name, **{k: st.get(k) for k in ("state", "name", "created", "cpu_s", "progress", "error")}})
     return out
 
 
-def run_results(rid: str) -> dict:
+def run_results(ws: Workspace, rid: str) -> dict:
     from .run import load_run
-    run = runs_dir() / _safe_id(rid)
+    run = ws.runs / _safe_id(rid)
     r = load_run(run)
     res, g = r["results"], r["grid"]
     return {"id": rid, "name": r["case"]["case"]["name"], "summary": r["summary"],
@@ -190,30 +337,33 @@ def run_results(rid: str) -> dict:
             "kernel": r["case"]["kernel"]["isorropia"], "notes": g.get("notes", [])}
 
 
-def run_post(rid: str, cfg: dict) -> dict:
+def run_post(ws: Workspace, rid: str, cfg: dict) -> dict:
     from .post import run_all
     from .run import load_run
-    run = runs_dir() / _safe_id(rid)
+    run = ws.runs / _safe_id(rid)
     r = load_run(run)
     return run_all(r, cfg, run)
 
 
 # ------------------------------------------------------------------ experiments
-def start_experiment(spec: dict) -> str:
+def start_experiment(ws: Workspace, spec: dict) -> str:
     from .experiments import expand, run_set
+    if shared_mode() and len(spec.get("variants", [])) > MAX_VARIANTS:
+        raise ValueError(f"at most {MAX_VARIANTS} variants per experiment set")
     for c in expand(spec):
-        casemod.resolve(c)
+        check_cost(c)
+    _check_quota(ws)
     eid = _new_id(spec.get("name", "experiment"))
-    d = exps_dir() / eid
+    d = ws.exps / eid
     d.mkdir()
     (d / "status.json").write_text(json.dumps({"state": "queued", "variants": []}))
-    POOL.submit(lambda: run_set(spec, d, workers=int(os.environ.get("SCRAMBOX_EXP_WORKERS", "4"))))
+    POOL.submit(lambda: run_set(spec, d, workers=int(os.environ.get("SCRAMBOX_EXP_WORKERS", "3"))))
     return eid
 
 
-def list_experiments() -> list[dict]:
+def list_experiments(ws: Workspace) -> list[dict]:
     out = []
-    for d in sorted(exps_dir().iterdir(), reverse=True):
+    for d in sorted(ws.exps.iterdir(), reverse=True):
         if not d.is_dir():
             continue
         st = json.loads((d / "status.json").read_text()) if (d / "status.json").exists() else {}
@@ -223,9 +373,11 @@ def list_experiments() -> list[dict]:
     return out
 
 
-def experiment(eid: str) -> dict:
+def experiment(ws: Workspace, eid: str) -> dict:
     from .experiments import compare
-    d = exps_dir() / _safe_id(eid)
+    d = ws.exps / _safe_id(eid)
+    if not d.is_dir():
+        raise KeyError(eid)
     st = json.loads((d / "status.json").read_text())
     if st.get("state") in ("queued", "running") or not (d / "experiment.json").exists():
         return {"id": eid, "status": st.get("state"), "progress": st.get("variants", [])}
@@ -236,23 +388,47 @@ def experiment(eid: str) -> dict:
 
 # ------------------------------------------------------------------ HTTP
 class Handler(BaseHTTPRequestHandler):
-    server_version = "scrambox/0.2"
+    server_version = "scrambox/0.3"
+    protocol_version = "HTTP/1.1"
 
     def log_message(self, fmt, *args):         # quiet
         pass
 
-    def _send(self, code, body, ctype="application/json; charset=utf-8"):
+    def _https(self) -> bool:
+        return self.headers.get("X-Forwarded-Proto", "").lower() == "https" or \
+            "Tailscale-Funnel-Request" in self.headers
+
+    def _send(self, code, body, ctype="application/json; charset=utf-8", cookie=None):
         data = body if isinstance(body, bytes) else json.dumps(body, ensure_ascii=False, allow_nan=False,
                                                              default=_json_default).encode("utf-8")
         self.send_response(code)
         self.send_header("Content-Type", ctype)
         self.send_header("Content-Length", str(len(data)))
         self.send_header("Cache-Control", "no-store")
+        self.send_header("X-Content-Type-Options", "nosniff")
+        self.send_header("X-Frame-Options", "SAMEORIGIN")
+        if cookie is not None:
+            self.send_header("Set-Cookie", cookie)
         self.end_headers()
         self.wfile.write(data)
 
+    def _cookie(self, token: str | None) -> str:
+        attrs = "Path=/; HttpOnly; SameSite=Lax" + ("; Secure" if self._https() else "")
+        if token is None:
+            return f"sb_session=; Max-Age=0; {attrs}"
+        return f"sb_session={token}; Max-Age={SESSION_DAYS * 86400}; {attrs}"
+
+    def _token(self) -> str | None:
+        c = SimpleCookie(self.headers.get("Cookie", ""))
+        return c["sb_session"].value if "sb_session" in c else None
+
+    def _ip(self) -> str:
+        return (self.headers.get("X-Forwarded-For", "") or self.client_address[0]).split(",")[0].strip()
+
     def _body(self):
         n = int(self.headers.get("Content-Length") or 0)
+        if n > MAX_BODY:
+            raise ValueError("request too large")
         return json.loads(self.rfile.read(n) or b"{}")
 
     def _route(self, method):
@@ -262,29 +438,46 @@ class Handler(BaseHTTPRequestHandler):
             if not parts or parts[0] != "api":
                 return self._static(path)
             p = parts[1:]
+            body = self._body() if method == "POST" else None
+            shared = shared_mode()
+            user = session_user(self._token()) if shared else None
+            if p == ["session"]:
+                return self._send(200, {"mode": "shared" if shared else "local", "user": user})
+            if p == ["login"] and method == "POST":
+                if not shared:
+                    return self._send(200, {"mode": "local", "user": None})
+                token = login(body.get("code", ""), body.get("name", ""), self._ip())
+                return self._send(200, {"mode": "shared", "user": body.get("name", "").strip()}, cookie=self._cookie(token))
+            if p == ["logout"] and method == "POST":
+                logout(self._token())
+                return self._send(200, {"ok": True}, cookie=self._cookie(None))
+            if shared and user is None:
+                return self._send(401, {"error": "sign in required", "login": True})
+            ws = workspace_for(user)
+            base = ws.root
             if method == "GET":
                 if p == ["meta"]:
                     return self._send(200, meta())
                 if p == ["scenarios"]:
-                    return self._send(200, scn.index())
+                    return self._send(200, scn.index(base))
                 if len(p) == 2 and p[0] == "scenarios":
-                    return self._send(200, scn.get(p[1]))
+                    return self._send(200, scn.get(p[1], base))
                 if p == ["runs"]:
-                    return self._send(200, list_runs())
+                    return self._send(200, list_runs(ws))
                 if len(p) == 2 and p[0] == "runs":
-                    return self._send(200, _status(runs_dir() / _safe_id(p[1])))
+                    return self._send(200, _status(ws.runs / _safe_id(p[1])))
                 if len(p) == 3 and p[0] == "runs" and p[2] == "results":
-                    return self._send(200, run_results(p[1]))
+                    return self._send(200, run_results(ws, p[1]))
                 if len(p) == 3 and p[0] == "runs" and p[2] == "case":
-                    d = runs_dir() / _safe_id(p[1])
-                    f = d / "case.json"
+                    f = ws.runs / _safe_id(p[1]) / "case.json"
+                    if not f.exists():
+                        raise KeyError(p[1])
                     return self._send(200, json.loads(f.read_text()))
                 if p == ["experiments"]:
-                    return self._send(200, list_experiments())
+                    return self._send(200, list_experiments(ws))
                 if len(p) == 2 and p[0] == "experiments":
-                    return self._send(200, experiment(p[1]))
+                    return self._send(200, experiment(ws, p[1]))
             elif method == "POST":
-                body = self._body()
                 if p == ["describe"]:
                     return self._send(200, scn.describe(body))
                 if p == ["grid"]:
@@ -292,27 +485,28 @@ class Handler(BaseHTTPRequestHandler):
                 if p == ["resolve"]:
                     return self._send(200, casemod.resolve(body))
                 if p == ["scenarios"]:
-                    return self._send(200, scn.save_user(body))
+                    return self._send(200, scn.save_user(body, base))
                 if p == ["runs"]:
-                    return self._send(200, {"id": start_run(body["case"], body.get("name"))})
+                    return self._send(200, {"id": start_run(ws, body["case"], body.get("name"))})
                 if len(p) == 3 and p[0] == "runs" and p[2] == "post":
-                    return self._send(200, run_post(p[1], body))
+                    return self._send(200, run_post(ws, p[1], body))
                 if p == ["experiments"]:
-                    return self._send(200, {"id": start_experiment(body)})
+                    return self._send(200, {"id": start_experiment(ws, body)})
             elif method == "DELETE":
                 if len(p) == 2 and p[0] == "scenarios":
-                    scn.delete_user(p[1])
+                    scn.delete_user(p[1], base)
                     return self._send(200, {"deleted": p[1]})
                 if len(p) == 2 and p[0] in ("runs", "experiments"):
-                    base = runs_dir() if p[0] == "runs" else exps_dir()
-                    d = base / _safe_id(p[1])
-                    if d.exists():
+                    d = (ws.runs if p[0] == "runs" else ws.exps) / _safe_id(p[1])
+                    if d.is_dir():
                         shutil.rmtree(d)
                     return self._send(200, {"deleted": p[1]})
             return self._send(404, {"error": "not found"})
+        except PermissionError as e:
+            return self._send(403, {"error": str(e)})
         except KeyError as e:
             return self._send(404, {"error": f"not found: {e}"})
-        except (ValueError, FileNotFoundError) as e:
+        except (ValueError, FileNotFoundError, json.JSONDecodeError) as e:
             return self._send(400, {"error": str(e)})
         except Exception as e:                  # noqa: BLE001
             traceback.print_exc()
@@ -350,7 +544,9 @@ def _json_default(o):
 
 def serve(host: str = "127.0.0.1", port: int = 8765):
     httpd = ThreadingHTTPServer((host, port), Handler)
-    print(f"SCRAM box app on http://{host}:{port}  (user data: {user_dir()})")
+    httpd.daemon_threads = True
+    print(f"SCRAM box app on http://{host}:{port}  mode={'shared' if shared_mode() else 'local'}  "
+          f"data={data_dir()}", flush=True)
     try:
         httpd.serve_forever()
     except KeyboardInterrupt:
