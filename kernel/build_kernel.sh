@@ -9,8 +9,11 @@
 set -u
 HERE=$(cd "$(dirname "$0")" && pwd)
 SCRAM_SRC=${SCRAM_SRC:-/data/shupengz/CESM_SCRAM/releases/cesm-scram-hetfix-20261005-r3/source}
+# CAM_SRC: the CAM component checkout (defaults to the one inside SCRAM_SRC); point it at a
+# CAM worktree to build the box kernel from a branch.
+CAM_SRC=${CAM_SRC:-$SCRAM_SRC/components/cam}
 ISO_VARIANT=${ISO_VARIANT:-v1}
-CARMA=$SCRAM_SRC/components/cam/src/physics/carma
+CARMA=$CAM_SRC/src/physics/carma
 CORE=$CARMA/models/scram/scram_core
 B=$HERE/build/$ISO_VARIANT
 FC=${FC:-gfortran}
@@ -18,8 +21,13 @@ FC=${FC:-gfortran}
 mkdir -p $B/src $B/mod $B/obj
 rm -f $B/obj/*.o $B/mod/*.mod $B/libscramcore.a
 
-# ---- snapshot of the kernel sources
-for d in . scram-1.1 AtmoData RDB VSRM SIMPLE_AQUEOUS INC isorropia; do
+# ---- snapshot of the kernel sources; like CAM's bld/configure, exactly one ISORROPIA
+# directory is compiled: isorropia (v1) or isorropia2 (v2.3, -DUSE_ISORROPIA2)
+if [ "$ISO_VARIANT" = "v23" ]; then ISODIR=isorropia2; else ISODIR=isorropia; fi
+if [ "$ISODIR" = "isorropia2" ] && [ ! -f $CORE/isorropia2/isocom2.f ]; then
+  echo "isorropia2 sources missing: run python3 $CORE/isorropia2/prepare_isorropia2.py <iso_2_3Src>"; exit 1
+fi
+for d in . scram-1.1 AtmoData RDB VSRM SIMPLE_AQUEOUS INC $ISODIR; do
   mkdir -p $B/src/$d
   find $CORE/$d -maxdepth 1 -type f \( -name '*.F90' -o -name '*.f90' -o -name '*.f' -o -name '*.inc' -o -name '*.INC' \) \
        -exec cp {} $B/src/$d/ \;
@@ -29,18 +37,17 @@ rm -f $B/src/RDB/test_ppm_dualmoment.f90
 cp $CARMA/models/scram/scram_cfg_io_mod.F90 $B/src/
 cp $CARMA/base/carma_precision_mod.F90 $B/src/
 cp $HERE/stubs/*.F90 $B/src/
-( cd $SCRAM_SRC/components/cam && echo "cam $(git log -1 --format='%H %ad %s' --date=short)" ) > $B/KERNEL_VERSION
-echo "source $SCRAM_SRC" >> $B/KERNEL_VERSION
-echo "isorropia $ISO_VARIANT" >> $B/KERNEL_VERSION
+( cd $CAM_SRC && echo "cam $(git rev-parse --abbrev-ref HEAD) $(git log -1 --format='%H %ad %s' --date=short)"; \
+  [ -n "$(git status --porcelain --untracked-files=no)" ] && echo "WARNING: uncommitted changes in $CAM_SRC" ) > $B/KERNEL_VERSION
+echo "source $CAM_SRC" >> $B/KERNEL_VERSION
+echo "isorropia $ISO_VARIANT ($ISODIR)" >> $B/KERNEL_VERSION
+[ -f $B/src/$ISODIR/ISORROPIA2_MANIFEST.txt ] || cp $CORE/$ISODIR/ISORROPIA2_MANIFEST.txt $B/src/$ISODIR/ 2>/dev/null
+[ -f $B/src/$ISODIR/ISORROPIA2_MANIFEST.txt ] && sed 's/^/  /' $B/src/$ISODIR/ISORROPIA2_MANIFEST.txt >> $B/KERNEL_VERSION
 
 DEFS=""
-if [ "$ISO_VARIANT" = "v23" ]; then
-  DEFS="-DUSE_ISORROPIA2"
-  mkdir -p $B/src/isorropia2
-  cp $HERE/isorropia2/*.f $HERE/isorropia2/*.inc $HERE/isorropia2/*.F90 $B/src/isorropia2/ 2>/dev/null
-fi
+[ "$ISO_VARIANT" = "v23" ] && DEFS="-DUSE_ISORROPIA2"
 
-INCS="-I$B/src/INC -I$B/src/scram-1.1 -I$B/src/isorropia -I$B/src/RDB -I$B/src/VSRM -I$B/src/SIMPLE_AQUEOUS -I$B/src"
+INCS="-I$B/src/INC -I$B/src/scram-1.1 -I$B/src/$ISODIR -I$B/src/RDB -I$B/src/VSRM -I$B/src/SIMPLE_AQUEOUS -I$B/src"
 # -fopenmp also for F77: SCRAM declares ISORROPIA common blocks THREADPRIVATE, so every
 # object must agree on thread-local storage (CESM compiles everything with OpenMP).
 FFLAGS_FIX="-O2 -fPIC -w -std=legacy -fopenmp -fallow-argument-mismatch -ffixed-line-length-none"
@@ -54,7 +61,7 @@ for f in $(find $B/src -name '*.f'); do
 done
 
 # ---- free-form sources: iterate until every module dependency is satisfied
-pending=$(find $B/src -name '*.F90' -o -name '*.f90' | grep -v '/isorropia/' )
+pending=$(find $B/src -name '*.F90' -o -name '*.f90')
 for pass in 1 2 3 4 5 6 7 8 9 10 11 12; do
   next=""
   for f in $pending; do
