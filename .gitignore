@@ -5,3 +5,4 @@ runs/
 kernel_build_*.log
 runs_before_fix/
 kernel/data/lut/*.nc
+dist/

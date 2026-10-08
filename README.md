@@ -30,5 +30,13 @@ python3 -m scrambox classes --preset NC11
 ```
 
 User data (runs, experiment sets, saved scenarios) go to `SCRAMBOX_USER_DIR` (default `~/.scrambox`).
+
+## Standalone package
+
+`bash tools/package_standalone.sh` writes `dist/scram-box-<date>.tar.gz` with statically linked
+kernels (no Fortran runtime needed on the target), the Python package, web interface, scenarios,
+species tables and LUTs; unpack, `pip install -r requirements.txt`, run `./scram-box` and open
+http://localhost:8765. The ISORROPIA II v2.3 kernel is included only with `INCLUDE_V23=1`
+(licence: research use, no redistribution).
 ISORROPIA II sources are licensed for research use and are not redistributed; they are generated
 locally from the EPFL distribution by `isorropia2/prepare_isorropia2.py` in the CESM-SCRAM branch.
