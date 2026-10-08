@@ -1,0 +1,20 @@
+{
+  "name": "CMAQ AERO6/AERO7 crustal and sea-salt cation speciation",
+  "purpose": "Diagnostic Ca2+, K+, Mg2+ (and Na+ from dust) passed to ISORROPIA II; mass fractions of the parent SCRAM species. They are non-volatile and are not transported as separate tracers.",
+  "provenance": {
+    "file": "kernel/reference/cmaq/AERO_DATA_v55_ae7_ts86.F (group CMAQ v5.5 cb6r5_ae7_aq, ts-86); identical tables in USEPA/CMAQ main 9bd3734176479c2e49139fea98e1d5e8a16170e3 aero6/AERO_DATA.F",
+    "dust_fine": "dust_spc fine (J) column, lines 'Sodium','Calcium','Magnesium','Potassium': median of SPECIATE desert soil profiles 3398, 3403, 3408, 3413",
+    "dust_coarse": "asoil_{na,ca,mg,k}_fac, applied to ASOIL (the coarse non-anion dust, 0.95358 of coarse dust): SPECIATE profiles 3399, 3404, 3409, 3414",
+    "sea_salt": "sea_spc fine column Na 0.30860, Ca 0.01180, Mg 0.03680, K 0.01140; expressed here relative to Na because SCRAM's sea-salt species PNA is sodium. The coarse ascat_*_fac give the same ratios (Mg/Na 0.1191, K/Na 0.0370, Ca/Na 0.0382)."
+  },
+  "fine_coarse_cut_diameter_um": 2.5,
+  "dust_parent_species": "PMD",
+  "dust_fraction_of_parent": {
+    "fine":   {"Na": 0.03935, "Ca": 0.07940, "Mg": 0.01900, "K": 0.03770},
+    "coarse": {"Na": 0.059694, "Ca": 0.079910, "Mg": 0.016211, "K": 0.023077}
+  },
+  "dust_coarse_note": "coarse values = asoil_*_fac (Na 0.0626, Ca 0.0838, Mg 0.0170, K 0.0242) x 0.95358 (ASOIL share of coarse dust), so that they are fractions of total coarse dust mass like the fine values",
+  "sea_salt_parent_species": "PNA",
+  "sea_salt_ratio_to_Na": {"Ca": 0.038237, "Mg": 0.119248, "K": 0.036941},
+  "molecular_weight_g_mol": {"Na": 23.0, "Ca": 40.1, "Mg": 24.3, "K": 39.1}
+}
