@@ -85,12 +85,12 @@ def metrics(run: dict) -> dict:
     iw = sp.index("PH2O")
     m = r["mass_ugm3"]                                   # (t, b, c, s)
     upper = np.array(g["bounds_um"][1:])
-    dry = m.sum(axis=(1, 2))
+    dry = m.sum(axis=(1, 2))                             # (t, s)
+    pm1 = m[:, upper <= 1.0 + 1e-9].sum(axis=(1, 2))     # (t, s)
     out = {"time_h": (r["time_s"] / 3600.0).tolist(),
            "N_cm3": (r["number_m3"].sum(axis=(1, 2)) / 1e6).tolist(),
            "PM_dry": (dry.sum(axis=1) - dry[:, iw]).tolist(),
-           "PM1_dry": (m[:, upper <= 1.0 + 1e-9].sum(axis=(1, 2)).sum(axis=1)
-                       - m[:, upper <= 1.0 + 1e-9, :, iw].sum(axis=(1, 2))).tolist(),
+           "PM1_dry": (pm1.sum(axis=1) - pm1[:, iw]).tolist(),
            "water": dry[:, iw].tolist(),
            "species": {s: dry[:, i].tolist() for i, s in enumerate(sp) if dry[:, i].max() > 0}}
     post = run.get("post") or {}

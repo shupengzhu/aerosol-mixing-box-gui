@@ -1,299 +1,184 @@
-# SCRAM box app 运行文件格式（草案 v0.2，2026-10-08）
+# SCRAM box app 运行文件格式与实现说明（v1.0，2026-10-08）
 
-一个 JSON 文件描述一次 box 模拟。GUI 读写它，命令行也能直接用它，用户不再接触 cfg。
-字段名用英文，界面上显示中文。
+一个 JSON（case）描述一次 box 模拟。网页界面读写它，命令行 `python -m scrambox run case.json -o RUN`
+也直接用它，用户不再接触 cfg。本文档描述已实现的格式；v0.2 草案中的设计均已落实，差异在各节注明。
 
-v0.1 的四点已确认（Python 编译器展开、模态为默认初始填法、气体源项代替气相化学、转写 7 个旧场景）。
-v0.2 新增：情景库与下拉选择（第 5 节）、后处理模块——光学辐射、云激活、非均相化学吸收（第 6 节）、
-多配置对比实验（第 7 节）、开发顺序（第 8 节）。
-
-## 1. 总体架构
+## 1. 架构
 
 ```
-GUI (浏览器)  ──编辑──▶  case.json  ──Python 编译器──▶  run/ 目录  ──▶  scram_box (Fortran)  ──▶  结果
-                                       ├─ run.nml            数值和开关
-                                       ├─ scram_species.dat  物种表（内核现有解析器读取）
-                                       └─ inputs.nc          初始状态、排放、气象时间序列
+网页界面 / CLI ──▶ case.json ──scrambox.compile──▶ RUN/ ─────────────▶ kernel/build/<v1|v23>/scram_box
+                                    ├ case.resolved.json  默认值补全后的 case            │
+                                    ├ grid.json           粒径段、类群、物种表           ▼
+                                    ├ scram_species.dat   内核物种表                 output.txt ─▶ results.npz
+                                    ├ run.nml             数值与开关                              summary.json
+                                    └ inputs.txt          数组（关键字块）                        post.json（后处理）
 ```
 
-- **JSON 是唯一的用户格式**；`run.nml`、`scram_species.dat` 是生成的中间文件，用户不需要看。
-- **Fortran 端不解析 JSON**：由 Python 校验并展开（类群生成、粒径分档、分布映射到格点），Fortran 只读展开后的数组。这样内核可执行文件不依赖 JSON 库，单机安装包更容易做。
-- 内核走与 CESM **完全相同的接口**：`scram_cesm_init_from_discretization` → `scram_cesm_set_met` →
-  `scram_cesm_set_state` → 循环 `scram_cesm_step` → `scram_cesm_get_state`。
-- ISORROPIA 版本对应两个内核可执行文件（v1、v2.3），由 `kernel.isorropia` 选择；`none` 用 v1 文件，
-  `use_isorropia = 0` 走 no-ISO 路径。
+- Fortran 驱动 `kernel/driver/scram_box.F90` 不解析 JSON，按与 CESM 完全相同的接口和顺序调用内核：
+  每步 排放与气体源 → 稀释 → SOA 光解损失 exp(−0.0004·J_NO2·dt) → `scram_cesm_set_met` →
+  `scram_cesm_set_hygro_rh(min(RH,0.98))` → `set_state` → n 次 `scram_cesm_step(dt/n)` → `get_state`。
+- 内核来自 CESM-SCRAM 分支 `component/cam-isorropia2-crustal`（hetfix 1ee5591 + ISORROPIA II v2.3 +
+  短调用修正 07f62ee），`kernel/build_kernel.sh` 编出 v1 与 v23 两个可执行文件，`KERNEL_VERSION` 记录提交号。
+  `kernel.isorropia = none` 用 v1 可执行文件并关闭 ISORROPIA（no-ISO 路径）。
 
-## 2. 顶层结构
+## 2. 顶层字段
 
-| 字段 | 对应 GUI 标签页 | 说明 |
+| 字段 | 界面位置 | 说明 |
 |---|---|---|
-| `schema` | — | `"scram-box/0.1"` |
-| `case` | 情景 | 名称、描述、来源模板 |
-| `kernel` | 顶栏 | ISORROPIA 版本、阳离子分配谱 |
-| `environment` | 情景 | 温度、气压、RH（常数或时间序列） |
-| `time` | 情景 | 时长、步长、输出间隔 |
-| `species` | 化学组分 | 气溶胶物种、气体物种，每个气溶胶物种归属一个组 |
-| `mixing` | 颗粒类群 | 内混或外混；外混时的主组、分段边界；生成的类群列表（只读回显） |
-| `size_bins` | 粒径分档 | 对数自动或手动边界 |
-| `initial` | 初始与排放 | 初始颗粒（模态或表格）和初始气体 |
-| `emissions` | 初始与排放 | 颗粒排放、气体源（含 H2SO4、SOAG0–4 生成率） |
-| `processes` | 过程与数值 | 凝并、冷凝、成核、热力学方案、求解器、再分配 |
-| `advanced` | 过程与数值的"高级"折叠区 | 核心粒径下限、成核限幅等，默认取 CESM 生产值 |
-| `output` | 运行与结果 | 输出变量和格式 |
+| `case` | 情景 | name、description、scenario_id、category、reference、derived_from |
+| `kernel` | 配置 › 内核与过程 | `isorropia`: `v23` / `v1` / `none` |
+| `environment` | 配置 › 环境与时间 | T、P、RH、J_NO2、稀释、时间序列 |
+| `time` | 配置 › 环境与时间 | duration_s、dt_s、**substep_s**、output_every_s |
+| `species` | 配置 › 物种与组 | `custom`: 自定义惰性物种 |
+| `mixing` | 配置 › 颗粒类群 | NC1 / NC6 / NC11 / custom |
+| `size_bins` | 配置 › 粒径段 | 对数自动或手动边界 |
+| `initial`、`emissions` | 初始与排放 | 颗粒（三种填法）、气体、时间廓线 |
+| `processes`、`advanced` | 配置 › 内核与过程 | 过程开关与数值方案，默认 CESM 生产值 |
+| `postprocess` | 后处理 | optics、ccn、hetchem |
 
-## 3. 各部分
+## 3. 字段细节
 
-### 3.1 `kernel`
+### 3.1 时间与内核子步长
 
 ```json
-"kernel": {
-  "isorropia": "v23",                       // "v23" | "v1" | "none"
-  "crustal_speciation": "cmaq_aero6_7"      // 仅 v23 有效；也可 "user" 并给出 crustal_table
-}
+"time": {"duration_s": 86400, "dt_s": 600, "substep_s": null, "output_every_s": 1800}
 ```
 
-### 3.2 `environment` 和 `time`
+`substep_s` 用户可改；为 `null` 时取默认：**ISORROPIA 动态方案（表面蒸汽压，非平衡）10 s，
+no-ISO 与整体平衡方案 600 s**（CESM `scram_target_dt`）。大于 dt_s 时截为 dt_s。
+
+> 内核修正（2026-10-08）：hetfix 的 `initstep` 先按剩余时间截断、再抬到 DTAEROMIN（60 s），
+> 导致短于 60 s 的调用实际积分 60 s（纯凝并 1 h 数浓度损失：600/300/60 s 调用 1.77 %，10 s 为 9.4 %，
+> 1 s 为 45 %）。分支 `component/cam-fix-short-call-overshoot`（07f62ee）改为先下限后截断，
+> 剩余时间 ≥ 60 s 的调用（全部 600 s 生产调用）结果逐位不变；修正后各子步长均为 1.77 %。
+
+### 3.2 环境
 
 ```json
 "environment": {
-  "temperature_K": 298.0,
-  "pressure_Pa": 101325.0,
-  "relative_humidity": 0.70,
-  "time_series": null          // 或 {"time_s": [...], "temperature_K": [...], "relative_humidity": [...]}
-},
-"time": { "duration_s": 43200, "dt_s": 600, "output_every_s": 600 }
-```
-
-### 3.3 `species`
-
-默认从物种库载入当前 hetfix 的 14 个气溶胶物种（含 PNH4/PNO3/PHCL，有机为 VBS 五档）和全部气体。
-用户可以加自定义物种，只需选组、填密度和分子量；其余热力学参数在"高级属性"里，有默认值。
-
-```json
-"species": {
-  "library": "scram_hetfix_iso14",
-  "aerosol": [
-    {"name": "PMD",    "group": "DU",  "density_gcm3": 2.60, "mw_gmol": 28.0},
-    {"name": "PBC",    "group": "BC",  "density_gcm3": 1.70, "mw_gmol": 12.0},
-    {"name": "PNA",    "group": "SLT", "density_gcm3": 1.90, "mw_gmol": 23.0},
-    {"name": "PSO4",   "group": "SUF", "density_gcm3": 1.77, "mw_gmol": 98.0},
-    {"name": "PSOA1P", "group": "SED", "density_gcm3": 1.00, "mw_gmol": 250.0}
-  ],
-  "groups": ["BC", "DU", "SLT", "SUF", "POA", "SED"],
-  "gas": "library"              // 气体列表按物种库；用户一般不改
+  "temperature_K": 298, "pressure_Pa": 101325, "relative_humidity": 0.7, "jno2_s1": 0,
+  "time_series": {"time_s": [...], "temperature_K": [...], "relative_humidity": [...],
+                  "pressure_Pa": [...], "jno2_s1": [...], "dilution_s1": [...]},
+  "dilution": {"rate_s1": 1.5e-5, "background": "initial"}
 }
 ```
 
-### 3.4 `mixing`（颗粒类群）
+时间序列线性插值、范围外取端点。稀释 x ← x − (1−e^(−k·dt))(x − x_bg)，背景默认为初始状态，
+也可给 `{"particles": {...}, "gas_ugm3": {...}}`。
+
+### 3.3 物种
+
+物种表来自内核：ISO 版 14 个气溶胶物种（PMD PBC PNA PSO4 PNH4 PNO3 PHCL PSOA1P–5P PPOAlP PH2O，
+有机为 CESM VBS），no-ISO 版 11 个；组顺序 BC DU SLT SUF POA SED（第 1 组为主组）。
+自定义物种插在 PH2O 之前，为惰性物种：
 
 ```json
-"mixing": {
-  "external": true,
-  "primary_fraction_bounds":   [0.0, 0.5, 0.9, 1.0],
-  "secondary_fraction_bounds": [0.0, 0.5, 0.9, 1.0],
-  "preset": "NC11"              // "NC1" | "NC6" | "NC11" | "custom"
-}
+"species": {"custom": [{"name": "X1", "group": "SED", "density_gcm3": 1.5, "mw_gmol": 150, "kappa": 0.1}]}
 ```
 
-生成规则与 CESM 完全相同（`carma_model_mod`）：第 1 组为主组，中间各组为次组，最后一组为余量；
-保留各组下限之和小于 1 的组合。GUI 实时显示生成的类群数和每个类群的组成区间。
+### 3.4 类群与粒径段
 
-### 3.5 `size_bins`
+类群生成与 CESM `carma_model_mod` 完全相同；NC1 = 内混，NC6 = 界限 0/0.5/1，NC11 = 0/0.5/0.9/1。
+`custom` 时给 `external`、`primary_fraction_bounds`、`secondary_fraction_bounds`。
+粒径段：`{"mode": "log", "n", "dmin_um", "dmax_um"}` 或 `{"mode": "explicit", "bounds_um": [...]}`。
+
+### 3.5 初始颗粒与排放（三种填法）
+
+| `mode` | 内容 | 类群归属 |
+|---|---|---|
+| `lognormal` | `modes`: name、number_cm3（排放为 number_cm3_s）、dg_um（数中值直径）、sigma_g、mass_fraction | 每个模态按干组成落到对应类群 |
+| `table` | number_cm3[类群][粒径]，mass_fraction[类群]{物种} | 直接指定 |
+| `bin_mass` | mass_ugm3{物种: [各粒径]}（排放为 mass_ugm3_s），number 可选（空则按中值粒径推算） | `mixing`: `internal` / `by_group` / `by_group_set`（`sets` 列表） |
+
+气体：`initial.gas_ugm3`、`emissions.gas_ugm3_s`。时间廓线：
+`emissions.time_profile`（颗粒排放倍数；为 null 时恒定）；`emissions.gas_time_profile`：
+null = 同颗粒排放，`"jno2"` = 按 J_NO2/max(J_NO2)（光化学生成的替代），或 `{time_s, factor}`。
+box 没有气相化学，H2SO4、HNO3、SOA 前体用气体源项给出。
+
+## 4. 情景库
+
+`scenarios/*.json` 由 `tools/make_scenarios.py` 生成（转换过程可复现）；用户情景存于
+`SCRAMBOX_USER_DIR/scenarios`（默认 `~/.scrambox`）。界面为带搜索的分组下拉框，选中后显示信息面板
+（环境、内核与过程、背景颗粒 N/PM1/PM2.5/PM10 与物种、背景气体、颗粒与气体排放、说明与文献），
+面板数据由 `/api/describe` 从 case 本身计算，保证与实际输入一致。
+
+| id | 类别 | 内容 |
+|---|---|---|
+| tutorial_minimal | 教学 | 新鲜 BC + 硫酸盐凝并 1 h，no-ISO |
+| gmd_hazy_condensation / gmd_hazy_coag_cond | GMD 验证 | Seigneur hazy 三模态，一半硫酸盐一半 BC，H2SO4 2.29e-4 µg m⁻³ s⁻¹，12 h |
+| gmd_paris_emission_only / coagulation / condensation / full | GMD 巴黎 A–D | 旧 BoxApp baseline12h：7 段初始质量与数浓度，BC/沙尘排放，气体源 |
+| urban_plume_aging | 混合态 | PartMC urban plume：背景 Aitken/积聚模态，柴油/汽油/烹饪排放 12 h，稀释 1.5e-5 s⁻¹，按 J_NO2 的 H2SO4/HNO3/SOA 源，24 h |
+| seasalt_nitrate | 混合态 | CESM 海盐分配（PNA 0.3866、PHCL 0.6134）+ 大陆硫酸铵 + HNO3 |
+| dust_crustal | 混合态 | 沙尘细/粗模态（CMAQ 地壳离子由 v2.3 内核诊断）+ 污染气体，RH 30→85 % |
+
+旧情景转换要点（写在各情景 notes 中）：H2O 有机物按 298 K 的 C* 归入最近的 VBS 档
+（C* > 1000 µg m⁻³ 的气相不表示）；颗粒 POA → PPOAlP（CESM POA 不挥发），POA 气体与排放按 C* 归入
+SOA 气体档；旧的外混初始按 沙尘 / BC / 无机 / 有机 四个群分配，数浓度按体积分配。
+海盐不采用 CMAQ sea_spc（含 SO4 而缺少 6 % 的 Mg/Ca/K，v1 下阴离子过剩，1 h 内约 25 % 的 Cl 以 HCl 逸出）。
+
+## 5. 后处理（与 CESM 同一套计算，`scrambox/post`）
+
+每个输出时刻、每个（粒径段，类群）为一个颗粒群；结果同时给出类群分辨与"每个粒径段合并为内混"的参考。
+
+### 5.1 光学（`optics.py`，对应 `CARMA_DiagnoseBulk`）
 
 ```json
-"size_bins": { "mode": "log", "n": 7, "dmin_um": 0.003, "dmax_um": 10.0 }
-// 或
-"size_bins": { "mode": "explicit", "bounds_um": [0.003, 0.01, 0.0398, 0.1585, 0.631, 2.5, 5.0, 10.0] }
+"postprocess": {"optics": {"enabled": true, "mixing": 2, "perclass": true,
+                           "prognostic_moments": false, "dryshell_selector": 0, "every": 1}}
 ```
 
-### 3.6 `initial`
+- mixing 0 按类型 Mie 表、1 体积平均折射率（在线 Mie）、2 简化壳 LUT（生产）、3 核壳 LUT；
+  折射率表、物种→光学类型、κ 表、MAM4 κ-Köhler 湿半径（含 0.35/0.80 滞后）与 CESM 逐项一致；
+  LUT 用 `kernel/fetch_luts.sh` 从 CESM 安装目录复制（波长与 CARMA/RRTMG 网格一致，SW 第 10 波段 0.533 µm）。
+- 输出：14 个短波波段消光、SSA、g，16 个长波吸收，550 nm 消光/SSA/g、BC 与沙尘贡献，按类群与粒径段的消光，
+  BC 吸收增强 E_abs（相对同体积裸 BC 球）。box 中 τ 换成消光系数（Mm⁻¹）。
+- 刻意保留的 CESM 行为（非生产路径）：mixing 0 的 RH 节点按均匀网格索引而 mie_rh 非均匀
+  （RH 0.82 读到 0.95–0.98 的表，吸湿增长高估）；mixing 1 的混合折射率不含水却用于湿半径。
 
-两种填法，GUI 用下拉切换：
+### 5.2 云活化（`ccn.py`，对应 `scram_cloud_aerosol_export`）
 
 ```json
-"initial": {
-  "particles": {
-    "mode": "lognormal",
-    "modes": [
-      {"name": "Aitken",       "number_cm3": 8000, "dg_um": 0.03, "sigma_g": 1.6,
-       "mass_fraction": {"PSO4": 0.7, "PSOA1P": 0.3}},
-      {"name": "accumulation", "number_cm3": 1500, "dg_um": 0.15, "sigma_g": 1.5,
-       "mass_fraction": {"PSO4": 0.5, "PNH4": 0.15, "PBC": 0.1, "PSOA2P": 0.25}}
-    ]
-  },
-  "gas_ugm3": {"SULF": 0.0, "NH3": 5.0, "HNO3": 2.0, "HCL": 0.1, "SOA1P": 0.5}
-}
+"postprocess": {"ccn": {"enabled": true, "supersaturations_pct": [0.02, 0.05, 0.1, 0.2, 0.3, 0.5, 1.0],
+                        "updrafts_m_s": [0.2, 0.5, 1.0, 2.0]}}
 ```
 
-或者表格模式（行列名自动生成，只填数字）：
+每个群取粒径段参考干半径与体积加权 κ，sc = 2A·√(A/(27κr³))；粒径段内按由 N 与干体积反推的线性质量倾斜
+计算部分活化；给定 S 的 CCN 谱（CESM CCN3 路径），以及 Abdul-Razzak & Ghan 最大过饱和度（f1=0.5、f2=1，
+ndrop_bam 热力学，w ≥ 0.2 m/s）下的云滴数、各类群活化比例。
+
+### 5.3 非均相化学（`hetchem.py`）
+
+k = Σ_p sfc_p / (0.5·dm_p/Dg + 4/(c·γ_p))（CAM `hetrxtrate`，Dg = 0.1 cm² s⁻¹，c = c0·√T）。
+表面积与湿直径同 CESM `scram_hetchem_sad_export`（干半径由 N 与 M 求得，湿直径用本群 PH2O）。
+
+| 规则 | γ |
+|---|---|
+| `cesm` | CESM 固定值（N2O5 0.1、HO2 0.2、NO3 1e-3、NO2 1e-4），作用于 f_chm 部分的表面（与 CESM 完全相同） |
+| `species` | 用户可编辑的物种 × 气体 γ 表，按干体积分数加权，作用于全部湿表面；默认表复现 CESM |
+| `bertram_thornton` | N2O5：Bertram & Thornton (2009)，由本群含水、硝酸根、氯离子浓度计算；可选有机包覆限制（Anttila 2006 / Riemer 2009） |
+
+输出 k、有效 γ（以总湿表面计）、寿命，类群分辨与内混参考对照。
+
+## 6. 实验组（`experiments.py`）
 
 ```json
-"particles": {
-  "mode": "table",
-  "number_cm3":   [[...每个类群一行，每个粒径档一列...]],
-  "mass_fraction": {"by": "class", "table": [[...每个类群一行，每个物种一列...]]}
-}
+{"name": "...", "base": {case}, "postprocess": {...},
+ "variants": [{"label": "NC1", "overrides": {"mixing.preset": "NC1"}}, ...]}
 ```
 
-模态模式下，Python 编译器把每个模态积分到粒径档，再按组成落到对应类群；表格模式直接使用。
+变体并行运行（`SCRAMBOX_EXP_WORKERS`，默认 4），对比指标：N、干 PM、PM1、含水、各物种、550 nm 消光
+（类群分辨与内混）、SSA、E_abs、各 S 的 CCN、各 w 的 Nd、各气体各规则的 k_het。
 
-### 3.7 `emissions`
+## 7. 运行方式
 
-```json
-"emissions": {
-  "particles": { "mode": "lognormal", "modes": [ {"number_cm3_s": 1.0, "dg_um": 0.05, "sigma_g": 1.8,
-                                                   "mass_fraction": {"PBC": 0.4, "PPOAlP": 0.6}} ] },
-  "gas_ugm3_s": {"SULF": 1.0e-4, "NH3": 2.0e-4, "SOA3P": 5.0e-5},
-  "time_profile": null      // 或分时段倍数
-}
+```bash
+python3 -m scrambox serve --port 8765          # 服务器上每个用户各起一个实例
+ssh -L 8765:localhost:8765 ts-106              # 本地浏览器打开 http://localhost:8765
+python3 -m scrambox run scenarios/dust_crustal.json -o runs/dust   # 命令行
 ```
 
-气体源项让 box 不需要气相化学，也能与 PartMC 用同一组预设输入对比。
+## 8. 状态与后续
 
-### 3.8 `processes`
-
-```json
-"processes": {
-  "coagulation": true,
-  "coagulation_repartition": "nearest",      // "nearest"（解析，无需系数文件）| "legacy"
-  "condensation": true,
-  "nucleation": {"enabled": false, "model": "binary"},
-  "sulfate": "dynamic",                      // Sulfate_computation
-  "thermodynamics": "dynamic",               // "dynamic"（表面蒸气压）| "equilibrium"（整体）
-  "dynamic_solver": "etr",                   // "euler" | "etr" | "ros2"
-  "redistribution": "moving_center_dualpivot",
-  "wet_diameter": "isorropia",               // "isorropia" | "gerber"
-  "density": {"mode": "variable", "fixed_kgm3": 1400}
-}
-```
-
-默认值取当前 CESM 生产配置（NC6/NC11）。
-
-### 3.9 `output`
-
-```json
-"output": { "format": "netcdf", "variables": ["number", "mass", "gas", "water", "ph", "wet_diameter"] }
-```
-
-结果写成一个 netCDF（时间 × 类群 × 粒径档 × 物种），外加一个运行摘要 JSON（耗时、守恒误差、
-内核版本 `KERNEL_VERSION`、ISORROPIA 清单）。GUI 的结果页和对比功能都读这两个文件。
-
-## 4. 已确认（2026-10-08）
-
-1. Python 编译器展开 JSON，Fortran 只读展开后的数组。
-2. 初始颗粒默认用对数正态模态填法，表格作为高级选项。
-3. box 用气体源项，不做气相化学；以后需要再接 CAMP。
-4. 转写旧 BoxApp 的 7 个典型场景。
-
-## 5. 情景库
-
-- **下拉菜单选择，不平铺卡片**。下拉框带搜索，按类别分组（教学、验证、城市、混合态、自定义）。
-- 选中后，旁边的信息面板显示该情景的：环境条件、背景气体浓度、背景颗粒（总数浓度、质量、主要组分）、
-  颗粒和气体排放（速率与时间变化）、文献出处。面板只读，点"载入"后才写入当前运行文件，各标签页可再改。
-- **自定义情景**：任何当前运行文件都可以"另存为情景"，存入用户情景库（服务器版存在用户目录，
-  单机版存在本地），之后出现在下拉菜单的"自定义"类别里，可重命名、删除、导出为 JSON 分享。
-- 内置情景：教学（BC + 硫酸盐）、GMD hazy 冷凝、hazy 凝并 + 冷凝、巴黎 A–D（Zhu et al. 2015），
-  以及计划书需要的城市羽流老化、海盐 + 硝酸盐、沙尘 + 地壳离子（v2.3）。
-
-```json
-"case": { "name": "城市羽流老化", "scenario_id": "mixing_urban_plume", "description": "...",
-          "reference": "...", "derived_from": "builtin" }
-```
-
-### 5.1 计划书需要的三个混合态情景（用户确认必须有）
-
-三者都对应计划书 WP2 的老化情景，并作为 PartMC 对比的共同输入（同一组背景、排放和气体源项）。
-数值在实现时从下列来源取，并在信息面板里注明出处；若有组内观测（SP2、TEM-EDX），优先用观测约束。
-
-| 情景 | 考察的过程 | 关键设定 | 参数来源（初定） |
-|---|---|---|---|
-| 城市羽流老化 `mixing_urban_plume` | 新鲜 BC/POA 被硫酸盐、硝酸铵、SOA 包覆，混合态从外混走向内混；N₂O₅、HO₂ 吸收随包覆变化 | 背景 + 交通/燃烧排放；H₂SO₄、HNO₃、NH₃、SOAG0–4 气体源项；日变化温湿度；24–48 h | PartMC urban plume 基准情景（Riemer et al., 2009 一系列）的排放与背景，按 NCP/YRD 观测调整 |
-| 海盐 + 硝酸盐 `mixing_seasalt_nitrate` | HNO₃ 与海盐反应造成氯亏损，Cl⁻ 可得性决定 ClNO₂ 产率 φ | 沿海受污染气团：海盐粗粒子 + 城市细粒子；HNO₃、HCl、NH₃；高 RH | 海盐谱用 CMAQ `sea_spc`；气体与颗粒负荷参考沿海站点 N₂O₅/ClNO₂ 观测（计划书 WP1 的合作数据） |
-| 沙尘 + 地壳离子 `mixing_dust_crustal` | 沙尘吸收 HNO₃/SO₂ 生成 Ca(NO₃)₂ 等吸湿盐，粗模态硝酸盐和含水量；**专门检验 v2.3 地壳离子与反向模式电荷平衡** | 沙尘粗细模态 + 污染细粒子；HNO₃、SO₂→H₂SO₄、NH₃；ISORROPIA v2.3 | 沙尘谱与地壳阳离子用 CMAQ `dust_spc`/`asoil_*_fac`（已入库）；负荷参考春季沙尘过境观测 |
-
-三个情景都会给出 v1 与 v2.3 两套运行结果；沙尘情景在 v1 下 Ca/K/Mg 不起作用，可作为地壳离子效应的对照。
-
-## 6. 后处理模块（与 CESM 同一套计算）
-
-后处理读取模拟输出（每个输出时刻、每个类群 × 粒径档的数浓度、各物种质量、含水量、湿直径），
-不改变模拟本身，因此可以对同一次模拟反复换参数分析。
-
-### 6.1 光学与辐射
-
-- **直接复用 CESM 的 SCRAM 光学模块**（`scram_reducedshell_optics_mod`、`scram_coreshell_optics_mod`，
-  只依赖 netCDF，宿主模块写桩即可），以及同一份查找表（`scram_reducedshell_optics_lut_cdf5.nc`、
-  `scram_coreshell_optics_lut.nc`）。
-- 混合方式与 CESM 的 `Optics_mixing` 一致：0 按物种外混，1 体积平均折射率 Mie，2 简化壳层查找表，
-  3 核壳查找表；`Optics_perclass`（按类群分别算或先合并）、`Optics_dryshell_selector` 也可选。
-- 波段与 CESM 相同（RRTMG 短波波段）外加 550 nm 诊断；湿直径按 CESM 约定用环境 RH 和 κ 计算。
-- 输出：消光、单次散射反照率、不对称因子（按类群、按粒径档、合计），以及吸收增强 E_abs。
-
-```json
-"postprocess": { "optics": { "enabled": true, "mixing": 2, "perclass": true,
-                             "dryshell_selector": 2, "wavelengths": "rrtmg_sw+550nm" } }
-```
-
-### 6.2 云激活
-
-- 与 CESM 的 `scram_cloud_aerosol_export` 同一算法：每个类群单独算 κ → Köhler 临界过饱和度 → 临界直径，
-  粒径档内按单分散处理活化比例；可选 Abdul-Razzak & Ghan (2000) 上升速度求最大过饱和度。
-- 该算法在 CESM 里嵌在 CAM 相关代码中，box 里按相同公式实现，并用 CESM 的诊断输出核对。
-- 输出：给定过饱和度序列（默认 0.05、0.1、0.2、0.3、0.5、1.0 %）的 CCN 谱，按类群分解；
-  给定上升速度时的最大过饱和度和活化数。
-
-```json
-"postprocess": { "ccn": { "enabled": true, "supersaturation_pct": [0.05, 0.1, 0.2, 0.3, 0.5, 1.0],
-                          "updraft_m_s": [0.1, 0.5, 1.0] } }
-```
-
-### 6.3 非均相化学（吸收系数实验）
-
-对应计划书 H1：同一颗粒群下，比较"按类群分别算 γ"与"按平均成分算 γ"与"CESM 固定 γ"。
-
-- **γ 表**：行是物种（或类群），列是气体（N₂O₅、HO₂、NO₃、NO₂，可扩展），只填数字；
-  另可选参数化（如 γ(N₂O₅) 的 Bertram & Thornton 2009、γ(HO₂) 的 Song 2020），参数化需要的
-  含水量、Cu/Fe、有机包覆从模拟输出取。
-- **混合规则**（下拉）：按类群分别计算再求和（类群分辨）、按体积/质量加权得到平均颗粒的 γ（内混）、
-  CESM 固定值（γ(N₂O₅)=0.1、γ(HO₂)=0.2，作用于总表面积）。
-- **计算**：每个类群 × 粒径档的湿表面积，一阶损失速率 k = Σ γ v A / 4（含 Fuchs–Sutugin 气相扩散修正），
-  以及群体有效 γ = k / (v A_total / 4)。
-- **输出**：k_het、群体有效 γ、类群分辨与内混之比（γ_pop / γ_mean，即计划书的判据量），随时间变化。
-- 第一阶段只做诊断（不回馈颗粒成分）；第二阶段可选在线耦合：给定 N₂O₅ 生成率，吸收产生的 HNO₃
-  （或按 φ 生成 ClNO₂）回到热力学，影响硝酸盐分配。
-
-```json
-"postprocess": { "hetchem": {
-  "enabled": true,
-  "gases": ["N2O5", "HO2"],
-  "gamma_table": { "by": "species", "rows": ["PSO4", "PNH4", "PNO3", "PSOA1P", "PBC", "PMD", "PNA"],
-                   "N2O5": [0.02, 0.02, 0.005, 0.001, 0.0, 0.01, 0.03],
-                   "HO2":  [0.05, 0.05, 0.05, 0.01, 0.0, 0.05, 0.10] },
-  "mixing_rules": ["class_resolved", "internal_mean", "cesm_fixed"],
-  "online_coupling": false } }
-```
-
-（上例 γ 数值只是格式示意的占位数，不是推荐值；内置的默认 γ 表会从计划书的参数汇编
-`parameter_compilation.xlsx` 取值并注明出处。）
-
-## 7. 多配置对比实验
-
-- 一个"实验组"由一个基准运行文件加若干变体组成，每个变体只写与基准不同的字段，例如：
-  NC1 / NC6 / NC11、ISORROPIA v1 / v2.3、不同 γ 表、不同光学混合方式。
-- 结果页并排比较：数浓度谱、各类群组成、含水量和 pH、光学量、CCN 谱、k_het 与 γ_pop/γ_mean。
-- 后处理参数（光学方式、过饱和度、γ 表）的变体不需要重跑模拟，直接对已有输出重新分析。
-
-```json
-{ "schema": "scram-box-experiment/0.1", "base": "case.json",
-  "variants": [ {"name": "NC1",  "set": {"mixing.preset": "NC1"}},
-                {"name": "NC11", "set": {"mixing.preset": "NC11"}},
-                {"name": "v1",   "set": {"kernel.isorropia": "v1"}} ] }
-```
-
-## 8. 开发顺序
-
-1. 内核 JSON 驱动（Python 编译器 + Fortran runner），用旧 BoxApp 的教学和 hazy 场景做回归；
-   接着测 ISORROPIA v2.3 和沙尘情景。
-2. 后处理：光学（复用 CESM 模块）→ 云激活 → 非均相化学诊断。
-3. 实验组与对比。
-4. 网页界面：情景下拉与信息面板、各标签页、表格编辑器、结果与对比页。
-5. 非均相化学在线耦合；单机安装包。
+已完成：内核驱动、编译器、10 个情景、三个后处理模块、实验组、网页界面（中英文）。
+后续：非均相化学在线耦合（N2O5 → HNO3 / ClNO2 回到热力学）；单机安装包（内核静态链接 + 打包 Python 与网页）；
+CCN 与光学在 CESM 同一状态上的逐点核对（需要从 CESM 输出导出单柱状态）。
