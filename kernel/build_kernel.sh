@@ -88,4 +88,12 @@ if $FC -fopenmp $B/link_check.f90 -Wl,--whole-archive $B/libscramcore.a -Wl,--no
 else
   echo "== link check: FAILED"; grep -E 'undefined reference' $B/link_check.log | sed 's/.*undefined reference to //' | sort -u | head -20
 fi
+
+# ---- box driver executable
+if $FC $FFLAGS_FREE -I$B/mod -J $B/obj $HERE/driver/scram_box.F90 $B/libscramcore.a \
+      -lblas -lm -o $B/scram_box > $B/driver_build.log 2>&1; then
+  echo "== driver: $B/scram_box"
+else
+  echo "== driver build FAILED"; grep -m10 -E 'Error|error' $B/driver_build.log
+fi
 cat $B/KERNEL_VERSION

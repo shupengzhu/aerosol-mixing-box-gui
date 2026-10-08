@@ -1,0 +1,16 @@
+{
+  "case": {"name": "smoke: BC + sulfate"},
+  "kernel": {"isorropia": "none"},
+  "time": {"duration_s": 3600, "dt_s": 600, "output_every_s": 600},
+  "environment": {"temperature_K": 298.0, "relative_humidity": 0.65},
+  "mixing": {"preset": "NC6"},
+  "initial": {
+    "particles": {"mode": "lognormal", "modes": [
+      {"name": "accumulation", "number_cm3": 3000, "dg_um": 0.10, "sigma_g": 1.6,
+       "mass_fraction": {"PSO4": 0.8, "PBC": 0.2}},
+      {"name": "fresh BC", "number_cm3": 2000, "dg_um": 0.05, "sigma_g": 1.7,
+       "mass_fraction": {"PBC": 1.0}}
+    ]},
+    "gas_ugm3": {"SULF": 2.0}
+  }
+}
