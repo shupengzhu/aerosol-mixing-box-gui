@@ -32,6 +32,7 @@ import numpy as np
 from . import case as casemod
 from .compile import build_grid, met_table
 from .grid import find_class
+from .ncio import NC_LOCK
 from .post.common import KAPPA
 
 PARTMC_BIN = {"v23": os.environ.get("PARTMC_V23", "/data/shupengz/Model/partmc/build_scram_v23/partmc"),
@@ -286,12 +287,11 @@ def particles_at(run_dir, k: int, max_particles: int = 6000, seed: int = 0) -> d
     if not files:
         raise FileNotFoundError("no PartMC output")
     k = max(0, min(int(k), len(files) - 1))
-    nc = Dataset(files[k])
-    spec = nc.variables["aero_species"].names.split(",")
-    mass = np.array(nc.variables["aero_particle_mass"][:])          # (spec, particle) kg
-    n = np.array(nc.variables["aero_num_conc"][:])
-    t = float(nc.variables["time"][0])
-    nc.close()
+    with NC_LOCK, Dataset(files[k]) as nc:
+        spec = nc.variables["aero_species"].names.split(",")
+        mass = np.array(nc.variables["aero_particle_mass"][:])      # (spec, particle) kg
+        n = np.array(nc.variables["aero_num_conc"][:])
+        t = float(nc.variables["time"][0])
     c = casemod.load(Path(run_dir) / "case.resolved.json")
     table = build_grid(c)["table"]
     rho = {_pmc_name(s): table.density_gcm3(s) * 1e3 for s in table.aerosol}
@@ -326,14 +326,14 @@ def read_particles(run_dir):
     gas names, gas ppb) for every PartMC output file."""
     from netCDF4 import Dataset
     for f in sorted(glob.glob(str(Path(run_dir) / "out" / "pmc_0001_*.nc"))):
-        nc = Dataset(f)
-        spec = nc.variables["aero_species"].names.split(",")
-        gas_names = nc.variables["gas_species"].names.split(",")
-        env = {k: float(nc.variables[k][...]) for k in ("temperature", "relative_humidity", "pressure")
-               if k in nc.variables}
-        yield (float(nc.variables["time"][0]), env, spec, np.array(nc.variables["aero_particle_mass"][:]),
-               np.array(nc.variables["aero_num_conc"][:]), gas_names, np.array(nc.variables["gas_mixing_ratio"][:]))
-        nc.close()
+        with NC_LOCK, Dataset(f) as nc:     # read fully under the lock, yield outside it
+            spec = nc.variables["aero_species"].names.split(",")
+            gas_names = nc.variables["gas_species"].names.split(",")
+            env = {k: float(nc.variables[k][...]) for k in ("temperature", "relative_humidity", "pressure")
+                   if k in nc.variables}
+            rec = (float(nc.variables["time"][0]), env, spec, np.array(nc.variables["aero_particle_mass"][:]),
+                   np.array(nc.variables["aero_num_conc"][:]), gas_names, np.array(nc.variables["gas_mixing_ratio"][:]))
+        yield rec
 
 
 def project(run_dir, out_dir=None, mixing: dict | None = None) -> dict:
