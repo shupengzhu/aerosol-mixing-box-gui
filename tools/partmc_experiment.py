@@ -25,7 +25,7 @@ import numpy as np
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from scrambox import scenarios as scn                      # noqa: E402
-from scrambox.partmc import chi_sections, project, run_partmc   # noqa: E402
+from scrambox.partmc import chi_sections, project, run_partmc, truth   # noqa: E402
 from scrambox.post import run_all                          # noqa: E402
 from scrambox.run import load_run, run_case                # noqa: E402
 
@@ -73,6 +73,8 @@ def main():
     ap.add_argument("--out", default="runs/wp2")
     ap.add_argument("--hours", type=float, default=None)
     ap.add_argument("--report-only", action="store_true", help="rebuild report.md from summary.json")
+    ap.add_argument("--post-only", action="store_true",
+                    help="reuse finished SCRAM and PartMC runs; redo projections, truth and post-processing")
     a = ap.parse_args()
     out = Path(a.out) / a.scenario
     out.mkdir(parents=True, exist_ok=True)
@@ -88,12 +90,23 @@ def main():
         base["kernel"]["isorropia"] = "v23"
 
     def scram(nc):
+        if a.post_only:
+            return nc
         c = copy.deepcopy(base); c["mixing"] = {"preset": nc}
         run_case(c, out / f"scram_{nc}")
         return nc
 
     def partmc(seed):
-        run_partmc(base, out / f"partmc_s{seed}", n_part=a.n_part, seed=seed)
+        rd = out / f"partmc_s{seed}"
+        if not a.post_only:
+            run_partmc(base, rd, n_part=a.n_part, seed=seed)
+        else:   # PartMC output exists; redo only the steps after the run that are missing
+            if not (rd / "summary.json").exists():
+                info = project(rd)
+                info["summary"].update(n_part=a.n_part, model="partmc")
+                (rd / "summary.json").write_text(json.dumps(info["summary"], indent=1))
+            if not (rd / "truth.json").exists():
+                truth(rd)
         for nc in PRESETS:
             d = out / f"partmc_s{seed}_{nc}"
             project(out / f"partmc_s{seed}", d, {"preset": nc})

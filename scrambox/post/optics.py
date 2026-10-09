@@ -77,13 +77,13 @@ def _lut(name):
     path = LUT_DIR / name
     if not path.exists():
         raise FileNotFoundError(f"{path} missing - run kernel/fetch_luts.sh")
-    d = netCDF4.Dataset(path)
-    out = {k: np.array(d[k][:], dtype=float) for k in ("wavelength", "r_wet", "eta", "fbc", "Qext", "Qsca", "asym")}
-    if "chi_w" in d.variables:
-        out["chi_w"] = np.array(d["chi_w"][:], dtype=float)
-        if int(d.getncattr("failed_nodes")) != 0:
-            raise ValueError("reduced-shell LUT contains failed nodes")
-    d.close()
+    from ..ncio import NC_LOCK
+    with NC_LOCK, netCDF4.Dataset(path) as d:
+        out = {k: np.array(d[k][:], dtype=float) for k in ("wavelength", "r_wet", "eta", "fbc", "Qext", "Qsca", "asym")}
+        if "chi_w" in d.variables:
+            out["chi_w"] = np.array(d["chi_w"][:], dtype=float)
+            if int(d.getncattr("failed_nodes")) != 0:
+                raise ValueError("reduced-shell LUT contains failed nodes")
     out["log_r"] = np.log(out["r_wet"])
     return out
 
