@@ -212,5 +212,62 @@ const Charts = (() => {
     }
   }
 
-  return { line, bars, color, fmt };
+  // 2-D histogram: points (x, y, weight) on log-x / linear-y bins, colour = log10(weight)
+  function heat(container, opt) {
+    container.innerHTML = "";
+    const W = opt.width || 560, H = opt.height || 300, m = { l: 62, r: 70, t: 12, b: 42 };
+    const nx = opt.nx || 40, ny = opt.ny || 25;
+    const wrap = document.createElement("div"); wrap.className = "chart"; container.appendChild(wrap);
+    const svg = el("svg", { viewBox: `0 0 ${W} ${H}` }, wrap);
+    const xs = opt.x, ys = opt.y, ws = opt.w;
+    if (!xs.length) { el("text", { x: W / 2, y: H / 2, "text-anchor": "middle", class: "lbl" }, svg).textContent = "no data"; return; }
+    const x0 = opt.xmin || Math.min(...xs.filter(v => v > 0)), x1 = opt.xmax || Math.max(...xs);
+    const y0 = opt.ymin !== undefined ? opt.ymin : Math.min(...ys), y1 = opt.ymax !== undefined ? opt.ymax : Math.max(...ys);
+    const lx0 = Math.log10(x0), lx1 = Math.log10(x1 * 1.0001);
+    const grid = Array.from({ length: ny }, () => new Float64Array(nx));
+    xs.forEach((x, i) => {
+      if (!(x > 0)) return;
+      const ix = Math.min(nx - 1, Math.max(0, Math.floor((Math.log10(x) - lx0) / (lx1 - lx0) * nx)));
+      const iy = Math.min(ny - 1, Math.max(0, Math.floor((ys[i] - y0) / (y1 - y0 || 1) * ny)));
+      grid[iy][ix] += ws[i];
+    });
+    let vmax = 0; grid.forEach(r => r.forEach(v => { if (v > vmax) vmax = v; }));
+    const vmin = vmax * 1e-3;
+    const cmap = f => {   // perceptual-ish ramp: dark blue -> teal -> yellow
+      const stops = [[49, 54, 149], [69, 117, 180], [116, 173, 209], [171, 217, 233], [254, 224, 144], [253, 174, 97], [244, 109, 67], [215, 48, 39]];
+      const p = Math.min(Math.max(f, 0), 1) * (stops.length - 1), i = Math.floor(p), w = p - i, a = stops[i], b = stops[Math.min(i + 1, stops.length - 1)];
+      return `rgb(${a.map((v, k) => Math.round(v + w * (b[k] - v))).join(",")})`;
+    };
+    const pw = (W - m.l - m.r) / nx, ph = (H - m.t - m.b) / ny;
+    const tip = document.createElement("div"); tip.className = "tip"; wrap.appendChild(tip);
+    grid.forEach((row, iy) => row.forEach((v, ix) => {
+      if (v <= vmin) return;
+      const f = Math.log10(v / vmin) / Math.log10(vmax / vmin);
+      const r = el("rect", { x: m.l + ix * pw, y: H - m.b - (iy + 1) * ph, width: pw + 0.5, height: ph + 0.5, fill: cmap(f) }, svg);
+      r.addEventListener("mousemove", ev => {
+        const b = svg.getBoundingClientRect();
+        tip.innerHTML = `${opt.xlabel}: ${fmt(Math.pow(10, lx0 + (ix + 0.5) * (lx1 - lx0) / nx))}<br>${opt.ylabel}: ${fmt(y0 + (iy + 0.5) * (y1 - y0) / ny)}<br>${opt.wlabel || "N"}: ${fmt(v)}`;
+        tip.style.display = "block"; tip.style.left = (ev.clientX - b.left + 12) + "px"; tip.style.top = (ev.clientY - b.top + 8) + "px";
+      });
+      r.addEventListener("mouseleave", () => tip.style.display = "none");
+    }));
+    const gx = el("g", { class: "axis" }, svg);
+    for (let e = Math.ceil(lx0); e <= Math.floor(lx1); e++) {
+      const X = m.l + (e - lx0) / (lx1 - lx0) * (W - m.l - m.r);
+      el("line", { x1: X, x2: X, y1: H - m.b, y2: H - m.b + 4 }, gx);
+      el("text", { x: X, y: H - m.b + 16, "text-anchor": "middle" }, gx).textContent = fmt(Math.pow(10, e));
+    }
+    [0, 0.25, 0.5, 0.75, 1].forEach(f => {
+      const v = y0 + f * (y1 - y0), Y = H - m.b - f * (H - m.t - m.b);
+      el("text", { x: m.l - 6, y: Y + 4, "text-anchor": "end" }, gx).textContent = fmt(v);
+    });
+    el("rect", { x: m.l, y: m.t, width: W - m.l - m.r, height: H - m.t - m.b, fill: "none", stroke: "currentColor", "stroke-opacity": 0.2 }, svg);
+    el("text", { x: (m.l + W - m.r) / 2, y: H - 6, "text-anchor": "middle", class: "lbl" }, svg).textContent = opt.xlabel;
+    el("text", { x: 14, y: (m.t + H - m.b) / 2, transform: `rotate(-90 14 ${(m.t + H - m.b) / 2})`, "text-anchor": "middle", class: "lbl" }, svg).textContent = opt.ylabel;
+    for (let k = 0; k < 20; k++) el("rect", { x: W - m.r + 18, y: m.t + (19 - k) * (H - m.t - m.b) / 20, width: 12, height: (H - m.t - m.b) / 20 + 0.5, fill: cmap(k / 19) }, svg);
+    el("text", { x: W - m.r + 34, y: m.t + 10, class: "lbl" }, svg).textContent = fmt(vmax);
+    el("text", { x: W - m.r + 34, y: H - m.b, class: "lbl" }, svg).textContent = fmt(vmin);
+  }
+
+  return { line, bars, heat, color, fmt };
 })();

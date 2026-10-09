@@ -23,7 +23,16 @@ PRESET_DIMENSIONS = {
     "processes.thermodynamics": ["dynamic", "equilibrium"],
     "time.substep_s": [600.0, 60.0, 10.0],
     "processes.coagulation": [True, False],
+    "model": ["scram", "partmc"],
 }
+
+
+def variant_model(v: dict) -> tuple[str, dict]:
+    """Model of a variant ("scram" or "partmc") and its PartMC options; given as the
+    override keys "model" and "partmc.<option>"."""
+    ov = v.get("overrides", {})
+    opts = {k.split(".", 1)[1]: val for k, val in ov.items() if k.startswith("partmc.")}
+    return str(ov.get("model", "scram")), opts
 
 
 def expand(spec: dict) -> list[dict]:
@@ -31,6 +40,8 @@ def expand(spec: dict) -> list[dict]:
     for v in spec["variants"]:
         c = copy.deepcopy(spec["base"])
         for path, val in v.get("overrides", {}).items():
+            if path == "model" or path.startswith("partmc."):
+                continue
             c = casemod.set_path(c, path, val)
         if spec.get("postprocess") is not None:
             c["postprocess"] = copy.deepcopy(spec["postprocess"])
@@ -64,8 +75,17 @@ def run_set(spec: dict, exp_dir: str | Path, workers: int = 4, on_update=None) -
         save()
         d = exp / f"{i:02d}_{_slug(spec['variants'][i]['label'])}"
         try:
-            out = run_case(cases[i], d)
-            status["variants"][i].update(state="done", run_dir=str(d), cpu_s=out["summary"]["cpu_s"])
+            model, opts = variant_model(spec["variants"][i])
+            if model == "partmc":
+                from .partmc import DEFAULTS, run_partmc
+                o = dict(DEFAULTS, **opts)
+                t0 = time.time()
+                run_partmc(cases[i], d, n_part=int(o["n_part"]), del_t=float(o["del_t"]), seed=int(o["seed"]),
+                           weighting_exponent=float(o["weighting_exponent"]), post=True)
+                status["variants"][i].update(state="done", run_dir=str(d), cpu_s=time.time() - t0)
+            else:
+                out = run_case(cases[i], d)
+                status["variants"][i].update(state="done", run_dir=str(d), cpu_s=out["summary"]["cpu_s"])
         except Exception as e:                      # noqa: BLE001 - reported to the user
             status["variants"][i].update(state="error", error=str(e)[-800:], run_dir=str(d))
         save()
@@ -93,6 +113,13 @@ def metrics(run: dict) -> dict:
            "PM1_dry": (pm1.sum(axis=1) - pm1[:, iw]).tolist(),
            "water": dry[:, iw].tolist(),
            "species": {s: dry[:, i].tolist() for i, s in enumerate(sp) if dry[:, i].max() > 0}}
+    from .partmc import chi_sections
+    out["chi_sections"] = [chi_sections(m[k], r["number_m3"][k], sp) for k in range(len(r["time_s"]))]
+    if run.get("truth"):                                 # PartMC: particle-resolved values
+        t = run["truth"]
+        out["truth_time_h"] = [x / 3600.0 for x in t["time_s"]]
+        out["chi_particle"] = t["chi"]
+        out["ccn_particle"] = t["ccn_cm3"]
     post = run.get("post") or {}
     if "optics" in post:
         o = post["optics"]

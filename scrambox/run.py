@@ -135,4 +135,6 @@ def load_run(run_dir: str | Path) -> dict:
            "results": res, "summary": json.loads((run / "summary.json").read_text())}
     if (run / "post.json").exists():
         out["post"] = json.loads((run / "post.json").read_text())
+    if (run / "truth.json").exists():                    # PartMC run: particle-resolved metrics
+        out["truth"] = json.loads((run / "truth.json").read_text())
     return out

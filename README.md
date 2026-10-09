@@ -31,6 +31,16 @@ python3 -m scrambox classes --preset NC11
 
 User data (runs, experiment sets, saved scenarios) go to `SCRAMBOX_USER_DIR` (default `~/.scrambox`).
 
+## PartMC mode
+
+`/?model=partmc` (or the SCRAM/PartMC switch in the top bar) runs the same scenario particle-resolved
+with PartMC plus the SCRAM per-particle thermodynamics (`pmc_scram_thermo`: dynamic ISORROPIA,
+CESM VBS SOA). Results are projected onto the scenario's size × class grid, so every SCRAM result view
+applies; a "particle-resolved" tab adds the per-particle truth (mixing-state index χ, κ-Köhler CCN,
+BC coating, 2-D histograms). The experiment preset "SCRAM NC1/NC6/NC11 vs PartMC" compares the grids
+with the truth. PartMC is not bundled: point `PARTMC_V23` / `PARTMC_V1` at builds of PartMC with the
+SCRAM thermodynamics module. Batch benchmark: `python3 tools/partmc_experiment.py <scenario>`.
+
 ## Shared server
 
 With an access code the server asks every user to sign in (access code + name) and keeps a

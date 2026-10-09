@@ -72,9 +72,13 @@ def main():
     ap.add_argument("--seeds", type=int, nargs="+", default=[1, 2, 3])
     ap.add_argument("--out", default="runs/wp2")
     ap.add_argument("--hours", type=float, default=None)
+    ap.add_argument("--report-only", action="store_true", help="rebuild report.md from summary.json")
     a = ap.parse_args()
     out = Path(a.out) / a.scenario
     out.mkdir(parents=True, exist_ok=True)
+    if a.report_only:
+        report(out, json.loads((out / "summary.json").read_text()))
+        return
     base = copy.deepcopy(scn.get(a.scenario)["case"])
     if a.hours:
         base["time"]["duration_s"] = a.hours * 3600
@@ -129,18 +133,28 @@ def report(out, S):
                  + " | ".join(f"PartMC→{nc}" for nc in PRESETS) + " | PartMC truth |")
     lines.append("|---|" + "---|" * (2 * len(PRESETS) + 1))
 
-    def row(label, key, sub=None, truth=None, fmt="{:.3g}"):
+    def f(x):
+        return "–" if x is None or (isinstance(x, float) and not np.isfinite(x)) else fmt.format(x)
+
+    fmt = "{:.3g}"
+
+    def ms(vals):
+        v = [x for x in vals if x is not None]
+        return (f(float(np.mean(v))) + " ± " + f(float(np.std(v)))) if v else "–"
+
+    def row(label, key, sub=None, truth=None):
+        if key not in R[f"scram_{PRESETS[0]}"]:
+            return
+        if sub is not None and any(sub not in R[k][key] for k in R):
+            return
         cells = []
         for nc in PRESETS:
             v = R[f"scram_{nc}"][key] if sub is None else R[f"scram_{nc}"][key][sub]
-            cells.append(fmt.format(v[end]))
+            cells.append(f(v[end]))
         for nc in PRESETS:
-            vals = [(R[f"partmc_s{s}_{nc}"][key] if sub is None else R[f"partmc_s{s}_{nc}"][key][sub])[end] for s in seeds]
-            cells.append(fmt.format(np.mean(vals)) + " ± " + fmt.format(np.std(vals)))
-        tcell = "–"
-        if truth:
-            vals = [truth(T[f"s{s}"]) for s in seeds]
-            tcell = fmt.format(np.mean(vals)) + " ± " + fmt.format(np.std(vals))
+            cells.append(ms([(R[f"partmc_s{s}_{nc}"][key] if sub is None else R[f"partmc_s{s}_{nc}"][key][sub])[end]
+                             for s in seeds]))
+        tcell = ms([truth(T[f"s{s}"]) for s in seeds]) if truth else "–"
         lines.append(f"| {label} | " + " | ".join(cells) + f" | {tcell} |")
 
     row("N (cm⁻³)", "N_cm3", truth=lambda t: t["n_total_cm3"][-1])

@@ -52,6 +52,9 @@ MAX_ACTIVE_PER_USER = int(os.environ.get("SCRAMBOX_MAX_ACTIVE", "3"))
 MAX_COST = float(os.environ.get("SCRAMBOX_MAX_COST", "2e7"))      # kernel calls x sections
 MAX_VARIANTS = int(os.environ.get("SCRAMBOX_MAX_VARIANTS", "10"))
 RUN_TIMEOUT_S = float(os.environ.get("SCRAMBOX_RUN_TIMEOUT", "3600"))
+MAX_PARTMC_PART = int(os.environ.get("SCRAMBOX_MAX_PARTMC_PART", "20000"))
+MAX_PARTMC_COST = float(os.environ.get("SCRAMBOX_MAX_PARTMC_COST", "3e7"))   # particles x steps
+PARTMC_TIMEOUT_S = float(os.environ.get("SCRAMBOX_PARTMC_TIMEOUT", "7200"))
 SESSION_DAYS = 30
 
 
@@ -206,6 +209,27 @@ def check_cost(case: dict) -> dict:
     return {"calls": calls, "sections": sections, "cost": cost}
 
 
+def partmc_options(case: dict, opts: dict | None) -> dict:
+    """Validated PartMC options for a case (shared-server limits apply)."""
+    from .partmc import DEFAULTS, available
+    o = dict(DEFAULTS, **(opts or {}))
+    o = {"n_part": int(o["n_part"]), "del_t": float(o["del_t"]), "seed": int(o["seed"]),
+         "weighting_exponent": float(o["weighting_exponent"])}
+    c = casemod.resolve(case)
+    if c["kernel"]["isorropia"] == "none":
+        raise ValueError("PartMC runs use SCRAM's ISORROPIA scheme: choose ISORROPIA v2.3 or v1")
+    if not available().get("v23" if c["kernel"]["isorropia"] == "v23" else "v1"):
+        raise ValueError("PartMC is not installed on this server")
+    if not (100 <= o["n_part"] <= 200000) or not (1.0 <= o["del_t"] <= 600.0):
+        raise ValueError("PartMC: n_part 100-200000, del_t 1-600 s")
+    if shared_mode():
+        steps = c["time"]["duration_s"] / o["del_t"]
+        if o["n_part"] > MAX_PARTMC_PART or o["n_part"] * steps > MAX_PARTMC_COST:
+            raise ValueError(f"PartMC run too large for the shared server (at most {MAX_PARTMC_PART} particles and "
+                             f"particles x steps <= {MAX_PARTMC_COST:.0e}; now {o['n_part']} x {steps:.0f})")
+    return o
+
+
 def _active_jobs(ws: Workspace) -> int:
     n = 0
     for base in (ws.runs, ws.exps):
@@ -250,8 +274,20 @@ def meta() -> dict:
             "post_defaults": {"optics": optics.DEFAULTS, "ccn": ccn.DEFAULTS,
                               "hetchem": hetchem.DEFAULTS, "gamma_cesm": hetchem.GAMMA_CESM},
             "experiment_dimensions": PRESET_DIMENSIONS,
-            "limits": ({"max_cost": MAX_COST, "max_active": MAX_ACTIVE_PER_USER, "max_variants": MAX_VARIANTS}
+            "partmc": {"available": _partmc_available(), "defaults": _partmc_defaults()},
+            "limits": ({"max_cost": MAX_COST, "max_active": MAX_ACTIVE_PER_USER, "max_variants": MAX_VARIANTS,
+                        "max_partmc_part": MAX_PARTMC_PART, "max_partmc_cost": MAX_PARTMC_COST}
                        if shared_mode() else None)}
+
+
+def _partmc_available():
+    from .partmc import available
+    return available()
+
+
+def _partmc_defaults():
+    from .partmc import DEFAULTS
+    return DEFAULTS
 
 
 def grid_info(case: dict) -> dict:
@@ -273,7 +309,10 @@ def _status(run: Path) -> dict:
     if not run.is_dir():
         raise KeyError(run.name)
     st = json.loads(f.read_text()) if f.exists() else {"state": "unknown"}
-    if st.get("state") == "running":
+    if st.get("state") == "running" and st.get("model") == "partmc":
+        from .partmc import progress
+        st["progress"] = progress(run)
+    elif st.get("state") == "running":
         out = run / "output.txt"
         try:
             n_done = sum(1 for line in open(out) if line.startswith("time")) if out.exists() else 0
@@ -292,21 +331,33 @@ def _write_status(run: Path, **kw):
     f.write_text(json.dumps(st, indent=1))
 
 
-def start_run(ws: Workspace, case: dict, name: str | None = None) -> str:
-    check_cost(case)
+def start_run(ws: Workspace, case: dict, name: str | None = None, model: str = "scram",
+              pm_opts: dict | None = None) -> str:
+    if model == "partmc":
+        pm = partmc_options(case, pm_opts)
+    else:
+        check_cost(case)
     _check_quota(ws)
-    rid = _new_id(name or case.get("case", {}).get("name", "run"))
+    rid = _new_id(("PartMC " if model == "partmc" else "") + (name or case.get("case", {}).get("name", "run")))
     run = ws.runs / rid
     run.mkdir()
     (run / "case.json").write_text(json.dumps(case, indent=1, ensure_ascii=False))
-    _write_status(run, state="queued", name=name or case.get("case", {}).get("name", ""), created=time.time())
+    _write_status(run, state="queued", name=name or case.get("case", {}).get("name", ""), created=time.time(),
+                  model=model)
 
     def job():
-        from .run import run_case
         _write_status(run, state="running", started=time.time())
         try:
-            out = run_case(case, run, timeout_s=RUN_TIMEOUT_S)
-            _write_status(run, state="done", finished=time.time(), cpu_s=out["summary"]["cpu_s"])
+            if model == "partmc":
+                from .partmc import run_partmc
+                t0 = time.time()
+                run_partmc(case, run, n_part=pm["n_part"], del_t=pm["del_t"], seed=pm["seed"],
+                           weighting_exponent=pm["weighting_exponent"], timeout_s=PARTMC_TIMEOUT_S, post=True)
+                _write_status(run, state="done", finished=time.time(), cpu_s=time.time() - t0)
+            else:
+                from .run import run_case
+                out = run_case(case, run, timeout_s=RUN_TIMEOUT_S)
+                _write_status(run, state="done", finished=time.time(), cpu_s=out["summary"]["cpu_s"])
         except Exception as e:                  # noqa: BLE001
             _write_status(run, state="error", finished=time.time(), error=str(e)[-1500:])
     POOL.submit(job)
@@ -318,7 +369,8 @@ def list_runs(ws: Workspace) -> list[dict]:
     for d in sorted(ws.runs.iterdir(), reverse=True):
         if d.is_dir():
             st = _status(d)
-            out.append({"id": d.name, **{k: st.get(k) for k in ("state", "name", "created", "cpu_s", "progress", "error")}})
+            out.append({"id": d.name, **{k: st.get(k) for k in ("state", "name", "created", "cpu_s", "progress",
+                                                                 "error", "model")}})
     return out
 
 
@@ -334,7 +386,11 @@ def run_results(ws: Workspace, rid: str) -> dict:
             "number_m3": _round(res["number_m3"]), "mass_ugm3": _round(res["mass_ugm3"]),
             "gas_ugm3": _round(res["gas_ugm3"]), "post": r.get("post"),
             "het": _round(res["het"]) if "het" in res else None,
-            "kernel": r["case"]["kernel"]["isorropia"], "notes": g.get("notes", [])}
+            "kernel": r["case"]["kernel"]["isorropia"], "notes": g.get("notes", []),
+            "model": "partmc" if (run / "pmc.spec").exists() else "scram",
+            "truth": json.loads((run / "truth.json").read_text()) if (run / "truth.json").exists() else None,
+            "partmc_options": (json.loads((run / "partmc_options.json").read_text())
+                               if (run / "partmc_options.json").exists() else None)}
 
 
 def run_post(ws: Workspace, rid: str, cfg: dict) -> dict:
@@ -350,8 +406,13 @@ def start_experiment(ws: Workspace, spec: dict) -> str:
     from .experiments import expand, run_set
     if shared_mode() and len(spec.get("variants", [])) > MAX_VARIANTS:
         raise ValueError(f"at most {MAX_VARIANTS} variants per experiment set")
-    for c in expand(spec):
-        check_cost(c)
+    from .experiments import variant_model
+    for v, c in zip(spec.get("variants", []), expand(spec)):
+        model, opts = variant_model(v)
+        if model == "partmc":
+            partmc_options(c, opts)
+        else:
+            check_cost(c)
     _check_quota(ws)
     eid = _new_id(spec.get("name", "experiment"))
     d = ws.exps / eid
@@ -468,6 +529,12 @@ class Handler(BaseHTTPRequestHandler):
                     return self._send(200, _status(ws.runs / _safe_id(p[1])))
                 if len(p) == 3 and p[0] == "runs" and p[2] == "results":
                     return self._send(200, run_results(ws, p[1]))
+                if len(p) == 3 and p[0] == "runs" and p[2] == "particles":
+                    from urllib.parse import parse_qs
+                    from .partmc import particles_at
+                    q = parse_qs(urlparse(self.path).query)
+                    return self._send(200, particles_at(ws.runs / _safe_id(p[1]), int(q.get("k", ["-1"])[0])
+                                                        if q.get("k", ["-1"])[0] != "-1" else 10 ** 6))
                 if len(p) == 3 and p[0] == "runs" and p[2] == "case":
                     f = ws.runs / _safe_id(p[1]) / "case.json"
                     if not f.exists():
@@ -487,7 +554,8 @@ class Handler(BaseHTTPRequestHandler):
                 if p == ["scenarios"]:
                     return self._send(200, scn.save_user(body, base))
                 if p == ["runs"]:
-                    return self._send(200, {"id": start_run(ws, body["case"], body.get("name"))})
+                    return self._send(200, {"id": start_run(ws, body["case"], body.get("name"),
+                                                            body.get("model", "scram"), body.get("partmc"))})
                 if len(p) == 3 and p[0] == "runs" and p[2] == "post":
                     return self._send(200, run_post(ws, p[1], body))
                 if p == ["experiments"]:

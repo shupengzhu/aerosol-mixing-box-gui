@@ -8,6 +8,8 @@ const S = {
   case: null, grid: null, tab: "scenario", setupSub: "kernel", inSub: "initial",
   runs: [], runId: null, results: null, resSub: "overview", tIndex: -1,
   exps: [], expId: null, expData: null, variants: [], dirty: false,
+  model: (new URLSearchParams(location.search).get("model")) || localStorage.getItem("sb_model") || "scram",
+  pm: null, pIndex: -1, particles: null,
 };
 const $ = (sel, root = document) => root.querySelector(sel);
 const t = k => (I18N[k] ? I18N[k][S.lang === "zh" ? 1 : 0] : k);
@@ -163,7 +165,7 @@ function changed(path) {
 function updateKernelChip() {
   if (!S.case) return;
   const k = S.case.kernel.isorropia;
-  $("#kernelChip").textContent = `${k === "v23" ? "ISORROPIA II 2.3" : k === "v1" ? "ISORROPIA v1" : "no-ISO"} · ${S.case.mixing.preset} · ${S.case.case.name || ""}`;
+  $("#kernelChip").textContent = `${S.model === "partmc" ? "PartMC · " : ""}${k === "v23" ? "ISORROPIA II 2.3" : k === "v1" ? "ISORROPIA v1" : "no-ISO"} · ${S.case.mixing.preset} · ${S.case.case.name || ""}`;
 }
 async function loadCase(c) {
   S.case = deepMerge(S.meta.defaults, c);
@@ -182,6 +184,10 @@ function renderTabs() {
     h("span", { class: "num" }, String(i + 1)), t(key))));
   document.querySelectorAll("[data-t]").forEach(e => e.textContent = t(e.dataset.t));
   document.querySelectorAll("#langSeg button").forEach(b => b.classList.toggle("on", b.dataset.lang === S.lang));
+  document.querySelectorAll("#modelSeg button").forEach(b => b.classList.toggle("on", b.dataset.model === S.model));
+  $("#brandName").textContent = S.model === "partmc" ? "PartMC Box" : "SCRAM Box";
+  $("#brandSub").textContent = t(S.model === "partmc" ? "partmc_sub" : "app_sub");
+  document.title = S.model === "partmc" ? "PartMC Box" : "SCRAM Box";
 }
 function render() {
   renderTabs();

@@ -4,15 +4,31 @@
 // ================================================================== 5 run & results
 function pageRun(page) {
   const nameInp = h("input", { type: "text", placeholder: t("run_name"), value: S.case ? S.case.case.name : "" });
-  const runBtn = h("button", { class: "btn primary", disabled: S.case ? null : true, onclick: async () => {
+  const pm = S.model === "partmc";
+  const pmAvail = S.meta.partmc && Object.values(S.meta.partmc.available || {}).some(Boolean);
+  S.pm = S.pm || Object.assign({}, (S.meta.partmc || {}).defaults || { n_part: 10000, del_t: 60, seed: 1, weighting_exponent: -1 });
+  const pmField = (k, label, step) => field(label, h("input", { type: "number", step: step || "any", value: S.pm[k],
+    onchange: ev => { S.pm[k] = parseFloat(ev.target.value); } }));
+  const runBtn = h("button", { class: "btn primary", disabled: S.case && (!pm || pmAvail) ? null : true, onclick: async () => {
     try {
       postCfg();
-      const r = await api("runs", "POST", { case: S.case, name: nameInp.value });
+      const body = { case: S.case, name: nameInp.value, model: S.model };
+      if (pm) body.partmc = S.pm;
+      const r = await api("runs", "POST", body);
       S.runId = r.id; S.results = null; toast(t("started") + ": " + r.id); await refreshRuns(); render();
-    } catch (e) { toast(e.message, 5000); }
-  } }, "▶ " + t("run"));
+    } catch (e) { toast(e.message, 6000); }
+  } }, "▶ " + t(pm ? "run_partmc" : "run"));
+  const lim = S.meta.limits;
+  const pmCard = !pm ? null : h("div", { class: "card" }, h("h3", { style: { marginTop: 0 } }, t("partmc_opts")),
+    pmAvail ? null : h("div", { class: "banner err" }, t("partmc_missing")),
+    h("div", { class: "fields", style: { gridTemplateColumns: "1fr 1fr" } },
+      pmField("n_part", t("n_part"), 1000), pmField("del_t", t("del_t"), 10), pmField("seed", t("seed"), 1), pmField("weighting_exponent", t("weighting"), 0.5)),
+    h("p", { class: "small muted", style: { margin: "10px 0 4px" } }, t("partmc_hint")),
+    h("p", { class: "small faint", style: { margin: 0 } }, t("partmc_not") +
+      (lim ? ` ≤ ${lim.max_partmc_part} · ${S.lang === "zh" ? "粒子数×步数" : "particles × steps"} ≤ ${fmt(lim.max_partmc_cost)}` : "")));
   const left = h("div", {},
     h("div", { class: "card" }, h("div", { class: "field" }, nameInp), h("div", { class: "row", style: { marginTop: "8px" } }, runBtn)),
+    pmCard,
     h("div", { class: "card" }, h("h3", { style: { marginTop: 0 } }, t("runs")), runList()));
   const right = h("div");
   page.append(h("div", { class: "side", style: { gridTemplateColumns: "280px minmax(0,1fr)" } }, left, right));
@@ -23,7 +39,7 @@ function pageRun(page) {
 function runList() {
   if (!S.runs.length) return h("div", { class: "faint small" }, t("no_runs"));
   return h("div", { class: "runlist" }, S.runs.map(r => h("div", { class: "runitem" + (r.id === S.runId ? " on" : ""), onclick: () => { S.runId = r.id; S.results = null; S.tIndex = -1; render(); } },
-    h("div", { class: "n" }, r.name || r.id),
+    h("div", { class: "n" }, r.model === "partmc" ? h("span", { class: "chip accent", style: { marginRight: "6px", padding: "0 6px" } }, "PartMC") : null, r.name || r.id),
     h("div", { class: "m" }, h("span", { class: "dot " + r.state }), r.state, r.cpu_s ? `${fmt(r.cpu_s)} s` : "", h("span", { class: "spacer" }),
       h("button", { class: "btn ghost sm", title: t("delete"), onclick: async ev => { ev.stopPropagation(); await api("runs/" + r.id, "DELETE"); if (S.runId === r.id) S.runId = null; await refreshRuns(); render(); } }, "✕")),
     ["running", "queued"].includes(r.state) ? h("div", { class: "bar" }, h("i", { style: { width: ((r.progress || 0) * 100).toFixed(0) + "%" } })) : null)));
@@ -47,8 +63,11 @@ async function showRun(box) {
   }
   const R = S.results;
   const subs = [["overview", "overview"], ["size", "sizedist"], ["mix", "mixstate"], ["optics", "optics"], ["ccn", "ccn"], ["het", "hetchem"]];
+  if (R.model === "partmc") subs.unshift(["particles", "particle_resolved"]);
+  if (R.model !== "partmc" && S.resSub === "particles") S.resSub = "overview";
   box.append(h("div", { class: "card" },
-    h("div", { class: "row" }, h("h2", {}, R.name), h("span", { class: "chip" }, R.kernel), h("span", { class: "chip" }, `${R.class_labels.length} ${t("classes_n")} × ${R.bounds_um.length - 1} ${t("bins_n")}`),
+    h("div", { class: "row" }, h("h2", {}, R.name), R.model === "partmc" ? h("span", { class: "chip accent" }, "PartMC" +
+      (R.partmc_options ? ` · ${R.partmc_options.n_part} ${S.lang === "zh" ? "粒子" : "particles"}` : "")) : null, h("span", { class: "chip" }, R.kernel), h("span", { class: "chip" }, `${R.class_labels.length} ${t("classes_n")} × ${R.bounds_um.length - 1} ${t("bins_n")}`),
       h("span", { class: "chip" }, `cpu ${fmt(R.summary.cpu_s)} s`), h("span", { class: "spacer" }),
       h("button", { class: "btn sm", onclick: () => download(R, `${R.id}.json`) }, t("download")),
       h("button", { class: "btn sm", onclick: async () => { const c = await api(`runs/${R.id}/case`); await loadCase(c); toast(t("loaded")); } }, t("load_editor"))),
@@ -56,7 +75,61 @@ async function showRun(box) {
     h("div", { class: "subtabs", style: { marginTop: "12px" } }, subs.map(([id, k]) => h("button", { class: S.resSub === id ? "on" : "", onclick: () => { S.resSub = id; render(); } }, t(k))))));
   const body = h("div");
   box.append(body);
-  ({ overview: resOverview, size: resSize, mix: resMix, optics: resOptics, ccn: resCcn, het: resHet })[S.resSub](body, R);
+  ({ overview: resOverview, size: resSize, mix: resMix, optics: resOptics, ccn: resCcn, het: resHet, particles: resParticles })[S.resSub](body, R);
+}
+
+// ---------------------------------------------------------------- PartMC particle-resolved view
+function resParticles(body, R) {
+  const T = R.truth;
+  const nOut = R.time_s.length;
+  if (S.pIndex < 0 || S.pIndex >= nOut) S.pIndex = nOut - 1;
+  const lab = h("span", { class: "mono" }, fmt(R.time_s[S.pIndex] / 3600) + " h");
+  const sl = h("input", { type: "range", min: 0, max: nOut - 1, value: S.pIndex, style: { width: "260px" } });
+  sl.oninput = () => { lab.textContent = fmt(R.time_s[+sl.value] / 3600) + " h"; };
+  sl.onchange = () => { S.pIndex = +sl.value; S.particles = null; render(); };
+  const info = h("span", { class: "muted small" });
+  body.append(h("div", { class: "card" }, h("div", { class: "row" }, h("span", { class: "muted small" }, t("select_time")), sl, lab, h("span", { class: "spacer" }), info)));
+  const charts = h("div", { class: "charts" });
+  body.append(charts);
+  if (T) {
+    const th = T.time_s.map(x => x / 3600);
+    // chi on the case grid, from the projected sections (same formula as tools/partmc_experiment.py)
+    const iw = R.species.indexOf("PH2O");
+    const chiSec = R.mass_ugm3.map(tb => {
+      const secs = []; tb.forEach(row => row.forEach(cc => { const m = cc.filter((_, i) => i !== iw); const s = m.reduce((a, b) => a + b, 0); if (s > 0) secs.push(m); }));
+      const tot = secs.reduce((a, m) => a + m.reduce((x, y) => x + y, 0), 0);
+      let Da = 0; secs.forEach(m => { const s = m.reduce((x, y) => x + y, 0); const H = -m.reduce((a, v) => a + (v > 0 ? v / s * Math.log(v / s) : 0), 0); Da += s / tot * H; });
+      const pa = secs[0] ? secs[0].map((_, j) => secs.reduce((a, m) => a + m[j], 0) / tot) : [];
+      const Dg = Math.exp(-pa.reduce((a, v) => a + (v > 0 ? v * Math.log(v) : 0), 0));
+      return Dg > 1 ? (Math.exp(Da) - 1) / (Dg - 1) : 1;
+    });
+    charts.append(chartCard(t("chi_title"), b => Charts.line(b, { xlabel: t("time_hours"), ymin: 0, ymax: 1, series: [
+      { name: t("chi_particle"), x: th, y: T.chi, width: 2.6, color: "#1c2433" },
+      { name: `${t("chi_sections")} (${R.class_labels.length} ${t("classes_n")})`, x: R.time_s.map(x => x / 3600), y: chiSec, dash: "6 4" }] })));
+    const Ss = Object.keys(T.ccn_cm3);
+    const post = R.post && R.post.ccn;
+    charts.append(chartCard(t("ccn_truth") + ` (${fmt(R.time_s[nOut - 1] / 3600)} h)`, b => Charts.line(b, { logx: true, xlabel: "S (%)", ylabel: "cm⁻³", series: [
+      { name: t("chi_particle"), x: Ss.map(Number), y: Ss.map(s => T.ccn_cm3[s][T.ccn_cm3[s].length - 1]), markers: true, width: 2.6, color: "#1c2433" },
+      ...(post ? [{ name: t("chi_sections"), x: post.resolved[post.resolved.length - 1].spectrum.map(s => s.S_pct), y: post.resolved[post.resolved.length - 1].spectrum.map(s => s.ccn_cm3), dash: "6 4", markers: true }] : [])] })));
+    if (T.bc_coating_ratio && T.bc_coating_ratio.some(v => v !== null)) {
+      charts.append(chartCard(S.lang === "zh" ? "含 BC 颗粒：数浓度与包覆比（非 BC 干质量 / BC 质量）" : "BC-containing particles: number and coating ratio (non-BC dry mass / BC mass)",
+        b => Charts.line(b, { xlabel: t("time_hours"), series: [{ name: "N_BC (cm⁻³)", x: th, y: T.n_bc_cm3 }, { name: S.lang === "zh" ? "包覆比" : "coating ratio", x: th, y: T.bc_coating_ratio }] })));
+    }
+  }
+  const mapBC = h("div", { class: "card" }, h("h3", { style: { margin: 0 } }, t("bc_map")), h("div", { class: "empty" }, "…"));
+  const mapK = h("div", { class: "card" }, h("h3", { style: { margin: 0 } }, t("kappa_map")), h("div", { class: "empty" }, "…"));
+  charts.append(mapBC, mapK);
+  const draw = P => {
+    info.textContent = `${P.shown} / ${P.n_particles} ${t("particles_shown")}`;
+    const opts = { x: P.d_um, w: P.n_cm3, xlabel: "D dry (µm)", wlabel: "N (cm⁻³)", nx: 40, ny: 25 };
+    mapBC.lastChild.remove(); const b1 = h("div"); mapBC.append(b1);
+    Charts.heat(b1, Object.assign({}, opts, { y: P.f_BC, ylabel: "BC mass fraction", ymin: 0, ymax: 1 }));
+    mapK.lastChild.remove(); const b2 = h("div"); mapK.append(b2);
+    Charts.heat(b2, Object.assign({}, opts, { y: P.kappa, ylabel: "κ", ymin: 0, ymax: Math.max(0.8, ...P.kappa.slice(0, 2000)) }));
+  };
+  if (S.particles && S.particles.id === R.id && S.particles.k === S.pIndex) draw(S.particles.data);
+  else api(`runs/${R.id}/particles?k=${S.pIndex}`).then(P => { S.particles = { id: R.id, k: S.pIndex, data: P }; draw(P); })
+    .catch(e => { mapBC.lastChild.textContent = e.message; });
 }
 
 function download(obj, name) {
@@ -232,9 +305,15 @@ function pageExp(page) {
       S.expId = r.id; S.expData = null; await refreshExps(); toast(t("started")); render();
     } catch (e) { toast(e.message, 5000); }
   } }, "▶ " + t("run_set"));
+  const vsBtn = h("button", { class: "btn", onclick: () => {
+    const pmo = S.pm || (S.meta.partmc || {}).defaults || {};
+    S.variants = ["NC1", "NC6", "NC11"].map(nc => ({ label: `SCRAM ${nc}`, overrides: { "mixing.preset": nc } }))
+      .concat([{ label: "PartMC", overrides: { model: "partmc", "partmc.n_part": pmo.n_part || 10000, "partmc.seed": pmo.seed || 1 } }]);
+    render();
+  } }, "⚖ " + t("vs_partmc"));
   page.append(h("div", { class: "card" }, h("h2", {}, t("experiments")), h("p", { class: "sub" }, t("exp_hint")),
     h("div", { class: "fields" }, field(t("name"), nameInp), field(t("dimension"), dimSel), field("", custPath), field("", custVals)),
-    h("div", { class: "row", style: { marginTop: "10px" } }, addBtn, h("span", { class: "spacer" }), runBtn),
+    h("div", { class: "row", style: { marginTop: "10px" } }, addBtn, vsBtn, h("span", { class: "spacer" }), runBtn),
     S.variants.length ? h("div", { class: "tablewrap", style: { marginTop: "12px" } }, h("table", { class: "data edit" },
       h("thead", {}, h("tr", {}, h("th", {}, t("label")), h("th", {}, t("overrides")), h("th"))), h("tbody", {}, vrows))) : null));
   const list = h("div", { class: "runlist" }, S.exps.length ? S.exps.map(e => h("div", { class: "runitem" + (e.id === S.expId ? " on" : ""), onclick: () => { S.expId = e.id; S.expData = null; render(); } },
@@ -262,7 +341,13 @@ async function showExp(box) {
   const metricDefs = [["N_cm3", "N (cm⁻³)", "time_h"], ["PM_dry", "PM dry (µg m⁻³)", "time_h"], ["PM1_dry", "PM1 dry (µg m⁻³)", "time_h"], ["water", "PH2O (µg m⁻³)", "time_h"]];
   if (done.length) {
     const m0 = done[0].metrics;
-    Object.keys(m0.species).forEach(s => metricDefs.push(["species." + s, s + " (µg m⁻³)", "time_h"]));
+    Object.keys(m0.species).filter(s => s !== "PH2O").forEach(s => metricDefs.push(["species." + s, s + " (µg m⁻³)", "time_h"]));
+    metricDefs.push(["chi_sections", "χ (" + t("chi_sections") + ")", "time_h"]);
+    const pmRun = done.find(v => v.metrics.chi_particle);
+    if (pmRun) {
+      metricDefs.push(["chi_particle", "χ PartMC " + t("chi_particle"), "truth_time_h"]);
+      Object.keys(pmRun.metrics.ccn_particle).forEach(s => metricDefs.push(["ccn_particle." + s, `CCN S=${s}% PartMC ${t("chi_particle")}`, "truth_time_h"]));
+    }
     if (m0.ext550) metricDefs.push(["ext550", "ext 550 (Mm⁻¹)", "post_time_h"], ["ext550_internal", "ext 550 internal (Mm⁻¹)", "post_time_h"], ["ssa550", "SSA 550", "post_time_h"], ["bc_abs_enh", "BC E_abs", "post_time_h"]);
     if (m0.ccn) Object.keys(m0.ccn).forEach(s => metricDefs.push(["ccn." + s, `CCN S=${s}% (cm⁻³)`, "post_time_h"]));
     if (m0.nd) Object.keys(m0.nd).forEach(w => metricDefs.push(["nd." + w, `Nd w=${w} m/s (cm⁻³)`, "post_time_h"]));
@@ -272,7 +357,20 @@ async function showExp(box) {
   const msel = h("select", { onchange: ev => { S.expMetric = ev.target.value; render(); } }, metricDefs.map(([k, l]) => h("option", { value: k, selected: k === S.expMetric ? true : null }, l)));
   const def = metricDefs.find(m => m[0] === S.expMetric);
   const getm = (v, k) => { const parts = k.split("."); return parts.length === 1 ? v.metrics[k] : (v.metrics[parts[0]] || {})[parts.slice(1).join(".")]; };
-  const series = done.map(v => ({ name: v.label, x: v.metrics[def[2]], y: getm(v, def[0]) || [] }));
+  const series = done.filter(v => v.metrics[def[2]] && getm(v, def[0]))
+    .map(v => ({ name: v.label, x: v.metrics[def[2]], y: getm(v, def[0]) }));
+  // grid metrics with a particle-resolved counterpart: overlay the PartMC truth as a dashed line
+  const truthRun = done.find(v => v.metrics.chi_particle);
+  if (truthRun && truthRun.metrics.truth_time_h) {
+    let ty = null;
+    if (def[0] === "chi_sections") ty = truthRun.metrics.chi_particle;
+    else if (def[0].startsWith("ccn.")) {
+      const sv = parseFloat(def[0].slice(4)), cp = truthRun.metrics.ccn_particle || {};
+      const k = Object.keys(cp).find(k => Math.abs(parseFloat(k) - sv) < 1e-9);
+      if (k) ty = cp[k];
+    }
+    if (ty) series.push({ name: truthRun.label + " · " + t("chi_particle"), x: truthRun.metrics.truth_time_h, y: ty, dash: "6 4" });
+  }
   const finals = series.map(s => s.y[s.y.length - 1]);
   box.append(h("div", { class: "card" }, h("div", { class: "row" }, h("h2", {}, E.name), h("span", { class: "chip" }, E.status), h("span", { class: "spacer" }), field(t("metric"), msel)),
     E.variants.filter(v => v.error).map(v => h("div", { class: "banner err" }, `${v.label}: ${v.error}`))),
@@ -302,6 +400,11 @@ async function init() {
   $("#themeBtn").onclick = () => { const v = document.documentElement.dataset.theme === "dark" ? "light" : "dark"; document.documentElement.dataset.theme = v; localStorage.setItem("sb_theme", v); if (S.meta) render(); };
   document.querySelectorAll("#langSeg button").forEach(b => b.onclick = () => { S.lang = b.dataset.lang; localStorage.setItem("sb_lang", S.lang); document.documentElement.lang = S.lang === "zh" ? "zh-CN" : "en";
     if (S.meta) render(); else { document.querySelectorAll("[data-t]").forEach(e => e.textContent = t(e.dataset.t)); document.querySelectorAll("#langSeg button").forEach(x => x.classList.toggle("on", x.dataset.lang === S.lang)); showLogin(); } });
+  document.querySelectorAll("#modelSeg button").forEach(b => b.onclick = () => {
+    S.model = b.dataset.model;
+    try { localStorage.setItem("sb_model", S.model); } catch (e) { /* storage unavailable */ }
+    if (S.meta) { updateKernelChip(); render(); } else renderTabs();
+  });
   const sess = await api("session");
   S.user = sess.user;
   if (sess.mode === "shared" && !sess.user) { renderTabs(); $("#tabs").innerHTML = ""; return showLogin(); }
