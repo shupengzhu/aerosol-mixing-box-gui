@@ -1,6 +1,17 @@
 // Interface strings, English / Chinese.
 const I18N = {
   app_sub: ["CESM-SCRAM hetfix kernel", "CESM-SCRAM hetfix 内核"],
+  select_step: ["Step", "步骤"],
+  export: ["Export", "导出"], export_download: ["Download results & charts", "下载结果与分析图"],
+  export_save: ["Save to cloud workspace", "保存到云工作区"],
+  export_wait: ["Complete a run before exporting.", "运行完成后才能导出。"],
+  export_packing: ["Preparing ZIP…", "正在打包…"], export_saving: ["Saving to cloud workspace…", "正在保存到云工作区…"],
+  export_select_run: ["Select a completed run to export.", "选择已完成的运行记录后可导出。"],
+  export_downloaded: ["Downloaded", "已下载"], export_saved: ["Saved to cloud workspace", "已保存到云工作区"],
+  export_session_expired: ["Sign in again, then retry the export.", "登录状态可能已失效，请重新登录后重试导出。"],
+  export_unexpected_response: ["Export returned an unexpected response; sign in again and retry.", "导出服务返回了异常内容，请重新登录后重试。"],
+  export_failed: ["Export failed; please retry.", "导出失败，请稍后重试。"],
+  export_json: ["Download JSON", "下载 JSON"],
   tab_scenario: ["Scenario", "情景"], tab_setup: ["Setup", "配置"], tab_inputs: ["Initial & emissions", "初始与排放"],
   tab_post: ["Post-processing", "后处理"], tab_run: ["Run & results", "运行与结果"], tab_exp: ["Experiments", "对比实验"],
   search_scenario: ["Search scenarios (name, tag, description)…", "搜索情景（名称、标签、描述）…"],

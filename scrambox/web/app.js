@@ -2,13 +2,19 @@
 "use strict";
 
 // ------------------------------------------------------------------ utilities
+const PARAM_MODEL = new URLSearchParams(location.search).get("model");
+const WEBSITE_EMBEDDED = location.pathname.includes("/partmc-box/") || location.pathname.includes("/scram-box/");
+const APP_SCOPE = location.pathname.includes("/partmc-box/") || PARAM_MODEL === "partmc" ? "partmc" : "scram";
+const storageKey = (name, user) => "sb_" + APP_SCOPE + "_" + (user ? encodeURIComponent(user) + "_" : "") + name;
+const caseStorageKey = () => storageKey("case", S.user || "anonymous");
+const prefStorageKey = name => storageKey(name, S.mode === "trusted" ? S.user : null);
 const S = {
-  lang: localStorage.getItem("sb_lang") || "zh",
+  lang: WEBSITE_EMBEDDED ? "zh" : localStorage.getItem(storageKey("lang")) || "zh",
   meta: null, scenarios: [], scenario: null, describe: null,
   case: null, grid: null, tab: "scenario", setupSub: "kernel", inSub: "initial",
   runs: [], runId: null, results: null, resSub: "overview", tIndex: -1,
   exps: [], expId: null, expData: null, variants: [], dirty: false,
-  model: (new URLSearchParams(location.search).get("model")) || localStorage.getItem("sb_model") || "scram",
+  model: PARAM_MODEL || (WEBSITE_EMBEDDED ? "scram" : localStorage.getItem(storageKey("model"))) || "scram",
   pm: null, pIndex: -1, particles: null,
 };
 const $ = (sel, root = document) => root.querySelector(sel);
@@ -51,8 +57,10 @@ function toast(msg, ms = 2600) {
   clearTimeout(e._t); e._t = setTimeout(() => e.classList.remove("show"), ms);
 }
 async function api(path, method = "GET", body) {
-  const r = await fetch("/api/" + path, { method, headers: { "Content-Type": "application/json" }, body: body ? JSON.stringify(body) : undefined });
+  const r = await fetch("api/" + path, { method, headers: { "Content-Type": "application/json" }, body: body ? JSON.stringify(body) : undefined });
+  if (r.redirected) throw new Error(t("export_session_expired"));
   const j = await r.json().catch(() => ({ error: r.statusText }));
+  if (r.ok && !(r.headers.get("Content-Type") || "").includes("application/json")) throw new Error(t("export_unexpected_response"));
   if (r.status === 401 && j.login && path !== "login") { showLogin(); throw new Error(j.error); }
   if (!r.ok) throw new Error(j.error || r.statusText);
   return j;
@@ -63,12 +71,12 @@ function showLogin(msg) {
   const main = document.querySelector("main");
   $("#tabs").innerHTML = "";
   const code = h("input", { type: "password", placeholder: t("access_code"), autocomplete: "current-password" });
-  const name = h("input", { type: "text", placeholder: t("your_name"), value: localStorage.getItem("sb_name") || "", autocomplete: "username" });
+  const name = h("input", { type: "text", placeholder: t("your_name"), value: localStorage.getItem(storageKey("name")) || "", autocomplete: "username" });
   const err = h("div", { class: "banner err", style: { display: msg ? "" : "none" } }, msg || "");
   const go = async () => {
     try {
       const r = await api("login", "POST", { code: code.value, name: name.value });
-      localStorage.setItem("sb_name", name.value.trim());
+      localStorage.setItem(storageKey("name"), name.value.trim());
       S.user = r.user; location.reload();
     } catch (e) { err.textContent = e.message; err.style.display = ""; }
   };
@@ -85,7 +93,7 @@ function userChip() {
   const old = $("#userChip"); if (old) old.remove();
   if (!S.user) return;
   host.prepend(h("span", { id: "userChip", class: "chip", title: t("workspace_hint") }, "👤 " + S.user,
-    h("button", { class: "btn ghost sm", style: { height: "20px", padding: "0 4px" }, onclick: async () => { await api("logout", "POST", {}); location.reload(); } }, t("sign_out"))));
+    S.mode === "trusted" ? null : h("button", { class: "btn ghost sm", style: { height: "20px", padding: "0 4px" }, onclick: async () => { await api("logout", "POST", {}); location.reload(); } }, t("sign_out"))));
 }
 const debounce = (fn, ms) => { let id; return (...a) => { clearTimeout(id); id = setTimeout(() => fn(...a), ms); }; };
 
@@ -180,8 +188,10 @@ async function loadCase(c) {
 const TABS = [["scenario", "tab_scenario"], ["setup", "tab_setup"], ["inputs", "tab_inputs"], ["post", "tab_post"], ["run", "tab_run"], ["exp", "tab_exp"]];
 function renderTabs() {
   const nav = $("#tabs"); nav.innerHTML = "";
-  TABS.forEach(([id, key], i) => nav.append(h("button", { class: "tab" + (S.tab === id ? " active" : ""), onclick: () => { S.tab = id; render(); } },
-    h("span", { class: "num" }, String(i + 1)), t(key))));
+  nav.append(h("label", { class: "step-picker" },
+    h("span", {}, t("select_step")),
+    h("select", { id: "stepSelect", "aria-label": t("select_step"), onchange: ev => { S.tab = ev.target.value; render(); } },
+      TABS.map(([id, key], i) => h("option", { value: id, selected: S.tab === id ? true : null }, `${i + 1}. ${t(key)}`)))));
   document.querySelectorAll("[data-t]").forEach(e => e.textContent = t(e.dataset.t));
   document.querySelectorAll("#langSeg button").forEach(b => b.classList.toggle("on", b.dataset.lang === S.lang));
   document.querySelectorAll("#modelSeg button").forEach(b => b.classList.toggle("on", b.dataset.model === S.model));

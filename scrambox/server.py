@@ -11,7 +11,7 @@ Standard-library HTTP server with a JSON API and a static single-page front end
 
 API (all under /api, JSON)
   GET  session | meta | scenarios | scenarios/<id> | runs | runs/<id> | runs/<id>/results
-       runs/<id>/case | experiments | experiments/<id>
+       runs/<id>/case | runs/<id>/export | experiments | experiments/<id>
   POST login {code, name} | logout | describe | grid | resolve | scenarios | runs {case, name}
        runs/<id>/post | experiments
   DELETE scenarios/<id> | runs/<id> | experiments/<id>
@@ -26,6 +26,7 @@ import os
 import re
 import secrets
 import shutil
+import stat
 import threading
 import time
 import traceback
@@ -48,6 +49,8 @@ LOCK = threading.Lock()
 
 # limits (shared mode)
 MAX_BODY = 8 * 1024 * 1024
+MAX_EXPORT_BODY = 128 * 1024 * 1024
+MAX_EXPORT_FILES = 1024
 MAX_ACTIVE_PER_USER = int(os.environ.get("SCRAMBOX_MAX_ACTIVE", "3"))
 MAX_COST = float(os.environ.get("SCRAMBOX_MAX_COST", "2e7"))      # kernel calls x sections
 MAX_VARIANTS = int(os.environ.get("SCRAMBOX_MAX_VARIANTS", "10"))
@@ -171,6 +174,12 @@ def session_user(token: str | None) -> str | None:
 def workspace_for(user: str | None) -> Workspace:
     if user is None:
         return Workspace(data_dir())
+    if re.fullmatch(r"5002:[1-9][0-9]*", user):
+        # Signed website identities use a separate private tenant namespace.
+        site_root = data_dir() / "site_users" / "5002" / user.split(":", 1)[1]
+        site_root.mkdir(mode=0o700, parents=True, exist_ok=True)
+        site_root.chmod(0o700)
+        return Workspace(site_root, user)
     return Workspace(data_dir() / "users" / user_slug(user), user)
 
 
@@ -377,6 +386,8 @@ def list_runs(ws: Workspace) -> list[dict]:
 def run_results(ws: Workspace, rid: str) -> dict:
     from .run import load_run
     run = ws.runs / _safe_id(rid)
+    if run.is_symlink() or not run.is_dir():
+        raise KeyError(rid)
     r = load_run(run)
     res, g = r["results"], r["grid"]
     return {"id": rid, "name": r["case"]["case"]["name"], "summary": r["summary"],
@@ -393,10 +404,78 @@ def run_results(ws: Workspace, rid: str) -> dict:
                                if (run / "partmc_options.json").exists() else None)}
 
 
+class RunNotReady(RuntimeError):
+    pass
+
+
+class ExportTooLarge(ValueError):
+    pass
+
+
+def _export_regular_file(name: str, *, directory_fd: int) -> bytes:
+    fd = os.open(name, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=directory_fd)
+    with os.fdopen(fd, "rb") as source:
+        info = os.fstat(source.fileno())
+        if not stat.S_ISREG(info.st_mode):
+            raise ValueError("export source is not a regular file")
+        if info.st_size > MAX_EXPORT_BODY:
+            raise ExportTooLarge("raw result file exceeds 128 MiB")
+        data = source.read(MAX_EXPORT_BODY + 1)
+    if len(data) > MAX_EXPORT_BODY:
+        raise ExportTooLarge("raw result file exceeds 128 MiB")
+    return data
+
+
+def run_export(ws: Workspace, rid: str) -> bytes:
+    """Export a completed owned SCRAM or PartMC run with bounded raw truth."""
+    from .export_bundle import result_archive
+    run = ws.runs / _safe_id(rid)
+    if run.is_symlink() or not run.is_dir():
+        raise KeyError(rid)
+    if _status(run).get("state") != "done":
+        raise RunNotReady("run must finish before export")
+    directory_fd = os.open(run, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+    raw_files: dict[str, bytes] = {}
+    try:
+        case = json.loads(_export_regular_file("case.json", directory_fd=directory_fd))
+        for name in ("results.npz", "grid.json", "case.resolved.json", "post.json",
+                     "truth.json", "partmc_options.json"):
+            if name in {"post.json", "truth.json", "partmc_options.json"} and not (run / name).exists():
+                continue
+            raw_files[name] = _export_regular_file(name, directory_fd=directory_fd)
+        out_path = run / "out"
+        if out_path.exists():
+            out_fd = os.open("out", os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=directory_fd)
+            try:
+                names = sorted(name for name in os.listdir(out_fd)
+                               if re.fullmatch(r"pmc_0001_[0-9]+\.nc", name))
+                if len(names) > MAX_EXPORT_FILES:
+                    raise ExportTooLarge("too many PartMC NetCDF files for one export")
+                for name in names:
+                    raw_files["out/" + name] = _export_regular_file(name, directory_fd=out_fd)
+            finally:
+                os.close(out_fd)
+        if sum(len(data) for data in raw_files.values()) > MAX_EXPORT_BODY:
+            raise ExportTooLarge("raw result files exceed 128 MiB")
+    finally:
+        os.close(directory_fd)
+    try:
+        archive = result_archive(rid, case, run_results(ws, rid), raw_files)
+    except ValueError as exc:
+        if "too large" in str(exc):
+            raise ExportTooLarge(str(exc)) from exc
+        raise
+    if len(archive) > MAX_EXPORT_BODY:
+        raise ExportTooLarge("export archive exceeds 128 MiB")
+    return archive
+
+
 def run_post(ws: Workspace, rid: str, cfg: dict) -> dict:
     from .post import run_all
     from .run import load_run
     run = ws.runs / _safe_id(rid)
+    if run.is_symlink() or not run.is_dir():
+        raise KeyError(rid)
     r = load_run(run)
     return run_all(r, cfg, run)
 
@@ -447,6 +526,18 @@ def experiment(ws: Workspace, eid: str) -> dict:
     return out
 
 
+# ------------------------------------------------------------------ trusted website proxy
+def trusted_proxy_secret() -> bytes | None:
+    path = Path(os.environ.get("SCRAMBOX_TRUSTED_PROXY_SECRET_FILE",
+                               data_dir() / "trusted_proxy_secret"))
+    if not path.is_file():
+        return None
+    secret = path.read_bytes().strip()
+    if len(secret) < 32:
+        raise RuntimeError("trusted proxy secret must contain at least 32 bytes")
+    return secret
+
+
 # ------------------------------------------------------------------ HTTP
 class Handler(BaseHTTPRequestHandler):
     server_version = "scrambox/0.3"
@@ -459,7 +550,7 @@ class Handler(BaseHTTPRequestHandler):
         return self.headers.get("X-Forwarded-Proto", "").lower() == "https" or \
             "Tailscale-Funnel-Request" in self.headers
 
-    def _send(self, code, body, ctype="application/json; charset=utf-8", cookie=None):
+    def _send(self, code, body, ctype="application/json; charset=utf-8", cookie=None, download_name=None):
         data = body if isinstance(body, bytes) else json.dumps(body, ensure_ascii=False, allow_nan=False,
                                                              default=_json_default).encode("utf-8")
         self.send_response(code)
@@ -470,6 +561,8 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header("X-Frame-Options", "SAMEORIGIN")
         if cookie is not None:
             self.send_header("Set-Cookie", cookie)
+        if download_name is not None:
+            self.send_header("Content-Disposition", f'attachment; filename="{download_name}"')
         self.end_headers()
         self.wfile.write(data)
 
@@ -486,11 +579,41 @@ class Handler(BaseHTTPRequestHandler):
     def _ip(self) -> str:
         return (self.headers.get("X-Forwarded-For", "") or self.client_address[0]).split(",")[0].strip()
 
-    def _body(self):
-        n = int(self.headers.get("Content-Length") or 0)
-        if n > MAX_BODY:
+    def _body_bytes(self) -> bytes:
+        try:
+            n = int(self.headers.get("Content-Length") or 0)
+        except ValueError:
+            raise ValueError("invalid content length")
+        if n < 0 or n > MAX_BODY:
             raise ValueError("request too large")
-        return json.loads(self.rfile.read(n) or b"{}")
+        return self.rfile.read(n)
+
+    def _trusted_proxy_user(self, method: str, raw_body: bytes) -> str | None:
+        user = self.headers.get("X-Scram-User")
+        timestamp = self.headers.get("X-Scram-Timestamp")
+        signature = self.headers.get("X-Scram-Signature")
+        if not any((user, timestamp, signature)):
+            return None
+        if not all((user, timestamp, signature)):
+            raise PermissionError("incomplete trusted proxy signature")
+        if self._token():
+            raise PermissionError("trusted proxy request cannot use session cookie")
+        if not re.fullmatch(r"5002:[1-9][0-9]*", user):
+            raise PermissionError("invalid trusted proxy user")
+        if not re.fullmatch(r"[0-9]{10,12}", timestamp):
+            raise PermissionError("invalid trusted proxy timestamp")
+        if abs(time.time() - int(timestamp)) > 60:
+            raise PermissionError("expired trusted proxy signature")
+        if not re.fullmatch(r"[0-9a-f]{64}", signature):
+            raise PermissionError("invalid trusted proxy signature")
+        secret = trusted_proxy_secret()
+        if secret is None:
+            raise PermissionError("trusted proxy is not configured")
+        message = "\n".join((user, timestamp, method.upper(), self.path,
+                             hashlib.sha256(raw_body).hexdigest())).encode()
+        if not hmac.compare_digest(hmac.new(secret, message, hashlib.sha256).hexdigest(), signature):
+            raise PermissionError("invalid trusted proxy signature")
+        return user
 
     def _route(self, method):
         path = unquote(urlparse(self.path).path)
@@ -499,17 +622,24 @@ class Handler(BaseHTTPRequestHandler):
             if not parts or parts[0] != "api":
                 return self._static(path)
             p = parts[1:]
-            body = self._body() if method == "POST" else None
+            raw_body = self._body_bytes()
+            trusted_user = self._trusted_proxy_user(method, raw_body)
+            body = json.loads(raw_body or b"{}") if method == "POST" else None
             shared = shared_mode()
-            user = session_user(self._token()) if shared else None
+            user = trusted_user if trusted_user is not None else (session_user(self._token()) if shared else None)
             if p == ["session"]:
-                return self._send(200, {"mode": "shared" if shared else "local", "user": user})
+                mode = "trusted" if trusted_user is not None else ("shared" if shared else "local")
+                return self._send(200, {"mode": mode, "user": user})
             if p == ["login"] and method == "POST":
+                if trusted_user is not None:
+                    return self._send(403, {"error": "website identity is managed by the website"})
                 if not shared:
                     return self._send(200, {"mode": "local", "user": None})
                 token = login(body.get("code", ""), body.get("name", ""), self._ip())
                 return self._send(200, {"mode": "shared", "user": body.get("name", "").strip()}, cookie=self._cookie(token))
             if p == ["logout"] and method == "POST":
+                if trusted_user is not None:
+                    return self._send(403, {"error": "website identity is managed by the website"})
                 logout(self._token())
                 return self._send(200, {"ok": True}, cookie=self._cookie(None))
             if shared and user is None:
@@ -529,11 +659,20 @@ class Handler(BaseHTTPRequestHandler):
                     return self._send(200, _status(ws.runs / _safe_id(p[1])))
                 if len(p) == 3 and p[0] == "runs" and p[2] == "results":
                     return self._send(200, run_results(ws, p[1]))
+                if len(p) == 3 and p[0] == "runs" and p[2] == "export":
+                    rid = _safe_id(p[1])
+                    model = _status(ws.runs / rid).get("model")
+                    prefix = "partmcbox" if model == "partmc" else "scrambox"
+                    return self._send(200, run_export(ws, rid), "application/zip",
+                                      download_name=f"{prefix}-{rid}.zip")
                 if len(p) == 3 and p[0] == "runs" and p[2] == "particles":
                     from urllib.parse import parse_qs
                     from .partmc import particles_at
                     q = parse_qs(urlparse(self.path).query)
-                    return self._send(200, particles_at(ws.runs / _safe_id(p[1]), int(q.get("k", ["-1"])[0])
+                    particle_run = ws.runs / _safe_id(p[1])
+                    if particle_run.is_symlink() or not particle_run.is_dir():
+                        raise KeyError(p[1])
+                    return self._send(200, particles_at(particle_run, int(q.get("k", ["-1"])[0])
                                                         if q.get("k", ["-1"])[0] != "-1" else 10 ** 6))
                 if len(p) == 3 and p[0] == "runs" and p[2] == "case":
                     f = ws.runs / _safe_id(p[1]) / "case.json"
@@ -566,12 +705,17 @@ class Handler(BaseHTTPRequestHandler):
                     return self._send(200, {"deleted": p[1]})
                 if len(p) == 2 and p[0] in ("runs", "experiments"):
                     d = (ws.runs if p[0] == "runs" else ws.exps) / _safe_id(p[1])
-                    if d.is_dir():
-                        shutil.rmtree(d)
+                    if d.is_symlink() or not d.is_dir():
+                        raise KeyError(p[1])
+                    shutil.rmtree(d)
                     return self._send(200, {"deleted": p[1]})
             return self._send(404, {"error": "not found"})
         except PermissionError as e:
             return self._send(403, {"error": str(e)})
+        except RunNotReady as e:
+            return self._send(409, {"error": str(e)})
+        except ExportTooLarge as e:
+            return self._send(413, {"error": str(e)})
         except KeyError as e:
             return self._send(404, {"error": f"not found: {e}"})
         except (ValueError, FileNotFoundError, json.JSONDecodeError) as e:

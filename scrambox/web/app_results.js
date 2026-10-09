@@ -1,5 +1,6 @@
 // Runs, result views, experiment sets, start-up.
 "use strict";
+let exportPending = null;
 
 // ================================================================== 5 run & results
 function pageRun(page) {
@@ -31,9 +32,9 @@ function pageRun(page) {
     pmCard,
     h("div", { class: "card" }, h("h3", { style: { marginTop: 0 } }, t("runs")), runList()));
   const right = h("div");
-  page.append(h("div", { class: "side", style: { gridTemplateColumns: "280px minmax(0,1fr)" } }, left, right));
+  page.append(h("div", { class: "side run-layout" }, left, right));
   if (S.runId) showRun(right);
-  else right.append(h("div", { class: "card empty" }, t("no_runs")));
+  else right.append(h("div", { class: "card empty" }, t("no_runs"), h("div", { style: { marginTop: "12px" } }, exportMenu(null, false, t("export_select_run")))));
 }
 
 function runList() {
@@ -50,7 +51,7 @@ async function refreshRuns() { S.runs = await api("runs"); }
 async function showRun(box) {
   const st = S.runs.find(r => r.id === S.runId) || {};
   if (st.state !== "done") {
-    box.append(h("div", { class: "card" }, h("h2", {}, st.name || S.runId), h("div", { class: "row" }, h("span", { class: "dot " + st.state }), st.state),
+    box.append(h("div", { class: "card" }, h("h2", {}, st.name || S.runId), h("div", { class: "row" }, h("span", { class: "dot " + st.state }), st.state, h("span", { class: "spacer" }), exportMenu(S.runId, false, t("export_wait"))),
       st.error ? h("pre", { class: "banner err mono", style: { whiteSpace: "pre-wrap" } }, st.error) : null,
       ["running", "queued"].includes(st.state) ? h("div", { class: "bar" }, h("i", { style: { width: ((st.progress || 0) * 100).toFixed(0) + "%" } })) : null));
     return;
@@ -69,13 +70,75 @@ async function showRun(box) {
     h("div", { class: "row" }, h("h2", {}, R.name), R.model === "partmc" ? h("span", { class: "chip accent" }, "PartMC" +
       (R.partmc_options ? ` · ${R.partmc_options.n_part} ${S.lang === "zh" ? "粒子" : "particles"}` : "")) : null, h("span", { class: "chip" }, R.kernel), h("span", { class: "chip" }, `${R.class_labels.length} ${t("classes_n")} × ${R.bounds_um.length - 1} ${t("bins_n")}`),
       h("span", { class: "chip" }, `cpu ${fmt(R.summary.cpu_s)} s`), h("span", { class: "spacer" }),
-      h("button", { class: "btn sm", onclick: () => download(R, `${R.id}.json`) }, t("download")),
+      exportMenu(R.id, true, null, R),
       h("button", { class: "btn sm", onclick: async () => { const c = await api(`runs/${R.id}/case`); await loadCase(c); toast(t("loaded")); } }, t("load_editor"))),
     R.notes && R.notes.length ? h("div", { class: "banner", style: { marginTop: "10px" } }, R.notes.join(" · ")) : null,
     h("div", { class: "subtabs", style: { marginTop: "12px" } }, subs.map(([id, k]) => h("button", { class: S.resSub === id ? "on" : "", onclick: () => { S.resSub = id; render(); } }, t(k))))));
   const body = h("div");
   box.append(body);
   ({ overview: resOverview, size: resSize, mix: resMix, optics: resOptics, ccn: resCcn, het: resHet, particles: resParticles })[S.resSub](body, R);
+}
+
+function exportMenu(runId, ready, reason, result) {
+  const unavailable = exportPending ? t(exportPending === "save" ? "export_saving" : "export_packing") : reason;
+  if (!ready || exportPending) return h("div", { class: "export-disabled" },
+    h("button", { type: "button", class: "btn sm", disabled: true, title: unavailable }, t("export") + " ▾"),
+    h("span", { class: "small muted" }, unavailable));
+  const menu = h("details", { class: "export-menu" });
+  const choices = [h("button", { type: "button", class: "btn ghost sm", onclick: () => exportRun(runId, "download", menu) }, t("export_download"))];
+  if (S.mode === "trusted") choices.push(h("button", { type: "button", class: "btn ghost sm", onclick: () => exportRun(runId, "save", menu) }, t("export_save")));
+  if (result) choices.push(h("button", { type: "button", class: "btn ghost sm", onclick: () => { menu.open = false; download(result, `${result.id}.json`); } }, t("export_json")));
+  menu.append(h("summary", { class: "btn sm" }, t("export") + " ▾"), h("div", { class: "export-options" }, choices));
+  menu.addEventListener("keydown", ev => { if (ev.key === "Escape") { menu.open = false; menu.querySelector("summary").focus(); } });
+  menu.addEventListener("focusout", ev => { if (!menu.contains(ev.relatedTarget)) menu.open = false; });
+  return menu;
+}
+
+async function exportRun(runId, destination, menu) {
+  if (exportPending) return;
+  exportPending = destination;
+  menu.open = false;
+  menu.setAttribute("aria-busy", "true");
+  menu.querySelector("summary").textContent = t(destination === "save" ? "export_saving" : "export_packing");
+  menu.querySelectorAll("button").forEach(button => { button.disabled = true; });
+  try {
+    if (destination === "save") {
+      const response = await fetch("save-export", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ run_id: runId }) });
+      if (response.redirected) throw new Error(t("export_session_expired"));
+      const saveType = (response.headers.get("Content-Type") || "").toLowerCase();
+      const result = saveType.includes("application/json") ? await response.json().catch(() => ({})) : {};
+      if (!response.ok) throw new Error(result.error || (response.status === 401 || response.status === 403 ? t("export_session_expired") : t("export_failed")));
+      if (!saveType.includes("application/json") || !result.ok) throw new Error(result.error || t("export_unexpected_response"));
+      toast(t("export_saved") + ": " + (result.relative_path || result.filename), 6000);
+      return;
+    }
+    const response = await fetch("api/runs/" + encodeURIComponent(runId) + "/export");
+    if (response.redirected) throw new Error(t("export_session_expired"));
+    const archiveType = (response.headers.get("Content-Type") || "").split(";")[0].trim().toLowerCase();
+    if (!response.ok) {
+      const error = archiveType.includes("json") ? await response.json().catch(() => ({})) : {};
+      throw new Error(error.error || (response.status === 401 || response.status === 403 ? t("export_session_expired") : t("export_failed")));
+    }
+    if (archiveType !== "application/zip") throw new Error(t("export_unexpected_response"));
+    const archive = await response.blob();
+    if (!archive.size) throw new Error("Empty export");
+    const disposition = response.headers.get("Content-Disposition") || "";
+    const named = disposition.split("filename=")[1];
+    const filename = (named ? named.split(";")[0].trim().replace(/^"|"$/g, "") : "scrambox-" + runId + ".zip").replace(/[\\/]/g, "_");
+    const url = URL.createObjectURL(archive);
+    const link = h("a", { href: url, download: filename });
+    document.body.append(link); link.click(); link.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+    toast(t("export_downloaded") + ": " + filename, 5000);
+  } catch (error) { toast(error.message, 6000); }
+  finally {
+    exportPending = null;
+    if (menu.isConnected) {
+      menu.removeAttribute("aria-busy");
+      menu.querySelector("summary").textContent = t("export") + " ▾";
+      menu.querySelectorAll("button").forEach(button => { button.disabled = false; });
+    } else if (S.tab === "run") render();
+  }
 }
 
 // ---------------------------------------------------------------- PartMC particle-resolved view
@@ -396,17 +459,23 @@ function renderRunListOnly() {
 }
 
 async function init() {
-  document.documentElement.dataset.theme = localStorage.getItem("sb_theme") || (matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light");
-  $("#themeBtn").onclick = () => { const v = document.documentElement.dataset.theme === "dark" ? "light" : "dark"; document.documentElement.dataset.theme = v; localStorage.setItem("sb_theme", v); if (S.meta) render(); };
-  document.querySelectorAll("#langSeg button").forEach(b => b.onclick = () => { S.lang = b.dataset.lang; localStorage.setItem("sb_lang", S.lang); document.documentElement.lang = S.lang === "zh" ? "zh-CN" : "en";
+  document.documentElement.dataset.theme = (WEBSITE_EMBEDDED ? null : localStorage.getItem(storageKey("theme"))) || (matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light");
+  $("#themeBtn").onclick = () => { const v = document.documentElement.dataset.theme === "dark" ? "light" : "dark"; document.documentElement.dataset.theme = v; localStorage.setItem(prefStorageKey("theme"), v); if (S.meta) render(); };
+  document.querySelectorAll("#langSeg button").forEach(b => b.onclick = () => { S.lang = b.dataset.lang; localStorage.setItem(prefStorageKey("lang"), S.lang); document.documentElement.lang = S.lang === "zh" ? "zh-CN" : "en";
     if (S.meta) render(); else { document.querySelectorAll("[data-t]").forEach(e => e.textContent = t(e.dataset.t)); document.querySelectorAll("#langSeg button").forEach(x => x.classList.toggle("on", x.dataset.lang === S.lang)); showLogin(); } });
   document.querySelectorAll("#modelSeg button").forEach(b => b.onclick = () => {
     S.model = b.dataset.model;
-    try { localStorage.setItem("sb_model", S.model); } catch (e) { /* storage unavailable */ }
+    try { localStorage.setItem(prefStorageKey("model"), S.model); } catch (e) { /* storage unavailable */ }
     if (S.meta) { updateKernelChip(); render(); } else renderTabs();
   });
   const sess = await api("session");
-  S.user = sess.user;
+  S.user = sess.user; S.mode = sess.mode;
+  if (S.mode === "trusted") {
+    S.lang = localStorage.getItem(prefStorageKey("lang")) || "zh";
+    if (!PARAM_MODEL) S.model = localStorage.getItem(prefStorageKey("model")) || "scram";
+    document.documentElement.lang = S.lang === "zh" ? "zh-CN" : "en";
+    document.documentElement.dataset.theme = localStorage.getItem(prefStorageKey("theme")) || (matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light");
+  }
   if (sess.mode === "shared" && !sess.user) { renderTabs(); $("#tabs").innerHTML = ""; return showLogin(); }
   userChip();
   S.meta = await api("meta");
@@ -415,7 +484,7 @@ async function init() {
   await refreshExps().catch(() => {});
   const first = S.scenarios.find(s => s.id === "urban_plume_aging") || S.scenarios[0];
   let draft = null;
-  try { draft = JSON.parse(localStorage.getItem("sb_case") || "null"); } catch (e) { draft = null; }
+  try { draft = JSON.parse(localStorage.getItem(caseStorageKey()) || "null"); } catch (e) { draft = null; }
   if (first) {
     S.scenario = await api("scenarios/" + first.id);
     S.describe = await api("describe", "POST", S.scenario.case).catch(e => ({ error: e.message }));
@@ -425,5 +494,5 @@ async function init() {
   render();
   poll();
 }
-setInterval(() => { if (S.dirty && S.case) { try { localStorage.setItem("sb_case", JSON.stringify(S.case)); S.dirty = false; } catch (e) { /* storage unavailable */ } } }, 3000);
+setInterval(() => { if (S.dirty && S.case) { try { localStorage.setItem(caseStorageKey(), JSON.stringify(S.case)); S.dirty = false; } catch (e) { /* storage unavailable */ } } }, 3000);
 init().catch(e => { document.querySelector("main").innerHTML = `<div class="banner err">${e.message}</div>`; });
