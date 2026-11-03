@@ -187,51 +187,7 @@ def smax_fn(N, sc, w, T_, P_, a_emp=2.0, stats=None):
     return s
 
 
-def smax_mbn(N, sc, w, T_, P_, a_emp=2.0, stats=None):
-    """Morales Betancourt & Nenes (2014) revised population splitting on the sectional CCN
-    spectrum: radius at s_max = D_pc/sqrt(3) (inertially limited, sc < s-), growth term
-    (s- <= sc <= s+) or critical radius (s+ < sc <= s_max); for s_max < xi_c both roots from
-    their Eq. (14), continuous with Eq. (10) at s_max = xi_c. Same coefficients as smax_fn."""
-    alpha, gamma, G, A = coefficients(T_, P_)
-    aw = alpha * w
-    coef = gamma * 4 * math.pi * 1000.0 * G
-    xi = (16 * A ** 2 * aw / (9 * G)) ** 0.25
-    Ad = a_emp * A
-    rc = 2 * A / (3 * sc)
-
-    def split(smax):
-        if smax > xi:
-            q = math.sqrt(1 - (xi / smax) ** 4)
-            return smax * math.sqrt(0.5 * (1 + q)), smax * math.sqrt(0.5 * (1 - q))
-        r = min(2e7 * Ad / 3 * (smax ** -0.3824 - xi ** -0.3824) + 1 / math.sqrt(2), 1.0)
-        return smax * r, smax * r
-
-    def f(smax):
-        sp, sm = split(smax)
-        act = sc <= smax
-        rg = np.sqrt(np.maximum(G * (smax ** 2 - sc ** 2) / aw, 0.0))
-        ri = np.where(sc < sm, rc / math.sqrt(3), np.where(sc <= sp, rg, rc))
-        return aw - coef * smax * np.sum(N[act] * ri[act])
-
-    lo, hi = 1e-7, 0.5
-    if f(hi) > 0:
-        return hi
-    for _ in range(60):
-        mid = math.sqrt(lo * hi)
-        if f(mid) > 0:
-            lo = mid
-        else:
-            hi = mid
-    s = math.sqrt(lo * hi)
-    if stats is not None:
-        stats.append(s > xi)
-    return s
-
-
 def smax_scheme(name, sl, zeta, pref, A=None):
-    if name == "MBN":
-        N, sc = fn_spectrum(sl)
-        return smax_mbn(N, sc, smax_scheme.w, T, P)
     if name in ("FN", "FNr"):
         N, sc = fn_spectrum(sl)
         return smax_fn(N, sc, smax_scheme.w, T, P, a_emp=2.0 if name == "FN" else 1.0)

@@ -40,7 +40,7 @@ mkdir -p "$OUT/kernel/data/lut"
 cp "$ROOT"/kernel/data/lut/*.nc "$OUT/kernel/data/lut/" 2>/dev/null || echo "warning: no LUTs (run kernel/fetch_luts.sh); optics will be unavailable"
 cp "$ROOT/README.md" "$ROOT/docs/使用说明.md" "$OUT/"
 mkdir -p "$OUT/tools" && cp "$ROOT/tools/service.sh" "$OUT/tools/" && chmod +x "$OUT/tools/service.sh"
-printf 'numpy>=1.24\nnetCDF4>=1.6\n' > "$OUT/requirements.txt"
+cp "$ROOT/requirements.txt" "$OUT/requirements.txt"
 cat > "$OUT/scram-box" <<'EOF'
 #!/bin/bash
 # Start the SCRAM Box web interface:  ./scram-box [--port 8765] [--host 127.0.0.1]

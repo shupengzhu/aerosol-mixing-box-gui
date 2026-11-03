@@ -22,8 +22,11 @@ import glob
 import json
 import math
 import os
+import re
 import shutil
+import signal
 import subprocess
+import threading
 import time
 from pathlib import Path
 
@@ -58,6 +61,20 @@ def _ppb(ug, mw, T, P):
 
 def _series_file(path, t, v):
     Path(path).write_text("".join(f"{a:.6f} {b:.8e}\n" for a, b in zip(t, v)))
+
+
+def validate_particle_input(case: dict) -> None:
+    """Reject particle representations that PartMC cannot sample before queuing a job."""
+    specs = [("initial.particles", case["initial"]["particles"]),
+             ("emissions.particles", case["emissions"]["particles"])]
+    background = (case["environment"].get("dilution") or {}).get("background")
+    if isinstance(background, dict):
+        specs.append(("environment.dilution.background.particles",
+                      background.get("particles") or {"mode": "lognormal", "modes": []}))
+    for location, spec in specs:
+        mode = spec.get("mode", "lognormal")
+        if mode != "lognormal":
+            raise ValueError(f"PartMC cannot use {mode} at {location}; choose lognormal particle input")
 
 
 N_SUB = 8          # sub-bins per SCRAM section for the sampled PartMC modes
@@ -228,6 +245,75 @@ do_parallel no
     return c
 
 
+_PARTMC_LOG_HEAD_BYTES = 4 * 1024 * 1024
+_PARTMC_LOG_TAIL_BYTES = 64 * 1024
+_SCI = rb"[+-]?(?:[0-9]+(?:\.[0-9]*)?|\.[0-9]+)[EeDd][+-]?[0-9]+"
+_PARTICLE_DEBUG_ROW = re.compile(rb"\s+".join([_SCI] * 5))
+
+
+def _log_tail(path: Path, limit: int = 1500) -> str:
+    """Read only the end of a log, even when an older log is many gigabytes."""
+    with path.open("rb") as source:
+        source.seek(0, os.SEEK_END)
+        source.seek(max(0, source.tell() - limit))
+        return source.read(limit).decode("utf-8", errors="replace")
+
+
+def _capture_partmc_output(pipe, log, stats: dict) -> None:
+    """Drain stdout without a pipeline, retaining bounded progress/error evidence.
+
+    A legacy PartMC build prints one five-column numerical debug row per particle;
+    those rows are not scientific results (NetCDF is). Count their suppression.
+    Retain the beginning plus the last non-debug bytes so a late error survives.
+    """
+    kept = 0
+    dropped = 0
+    filtered = 0
+    tail = b""
+    try:
+        while raw := pipe.readline(64 * 1024):
+            if _PARTICLE_DEBUG_ROW.fullmatch(raw.strip()):
+                filtered += 1
+                continue
+            tail = (tail + raw)[-_PARTMC_LOG_TAIL_BYTES:]
+            take = min(len(raw), _PARTMC_LOG_HEAD_BYTES - kept)
+            if take:
+                log.write(raw[:take])
+                log.flush()
+                kept += take
+            dropped += len(raw) - take
+        if dropped:
+            log.write(f"\n[PartMC log capped; {dropped} non-debug bytes omitted; "
+                      f"last {len(tail)} bytes follow]\n".encode())
+            log.write(tail)
+        if filtered:
+            log.write(f"\n[suppressed {filtered} repetitive five-column scientific-notation "
+                      "debug rows; particle results are in NetCDF]\n".encode())
+        log.flush()
+        stats.update(filtered_debug_lines=filtered, omitted_log_bytes=dropped)
+    except BaseException as exc:
+        stats["error"] = exc
+    finally:
+        pipe.close()
+
+
+def _terminate_owned_group(proc: subprocess.Popen) -> None:
+    """Terminate only this PartMC run's process group, including any children."""
+    try:
+        os.killpg(proc.pid, signal.SIGTERM)
+    except ProcessLookupError:
+        pass
+    try:
+        proc.wait(timeout=5)
+    except subprocess.TimeoutExpired:
+        pass
+    try:
+        os.killpg(proc.pid, signal.SIGKILL)
+    except ProcessLookupError:
+        pass
+    proc.wait()
+
+
 DEFAULTS = {"n_part": 10000, "del_t": 60.0, "seed": 1, "weighting_exponent": -1.0}
 
 
@@ -236,15 +322,26 @@ def available() -> dict:
     return {k: Path(v).exists() for k, v in PARTMC_BIN.items()}
 
 
-def progress(run_dir) -> float | None:
-    """Fraction of output files written so far."""
+def progress_details(run_dir) -> dict:
+    """Actual PartMC files/log activity; elapsed time is added by the server."""
     d = Path(run_dir)
+    files = list((d / "out").glob("pmc_0001_*.nc"))
+    last_output_at = max((p.stat().st_mtime for p in files), default=None)
+    log = d / "pmc.log"
+    details = {"output_count": len(files), "last_output_at": last_output_at,
+               "log_bytes": log.stat().st_size if log.exists() else 0}
     try:
         c = casemod.load(d / "case.resolved.json")
-        n_tot = int(c["time"]["duration_s"] // c["time"]["output_every_s"]) + 1
-        return min(len(glob.glob(str(d / "out" / "pmc_0001_*.nc"))) / max(n_tot, 1), 1.0)
-    except Exception:                                    # noqa: BLE001
-        return None
+        n_tot = max(int(c["time"]["duration_s"] // c["time"]["output_every_s"]) + 1, 1)
+        details.update(expected_output_count=n_tot, progress=min(len(files) / n_tot, 1.0))
+    except (OSError, KeyError, TypeError, ValueError, json.JSONDecodeError):
+        details.update(expected_output_count=None, progress=None)
+    return details
+
+
+def progress(run_dir) -> float | None:
+    """Backward-compatible fraction of completed output files."""
+    return progress_details(run_dir)["progress"]
 
 
 def run_partmc(user_case: dict, run_dir, n_part: int = 10000, del_t: float = 60.0, seed: int = 1,
@@ -257,13 +354,44 @@ def run_partmc(user_case: dict, run_dir, n_part: int = 10000, del_t: float = 60.
         {"n_part": n_part, "del_t": del_t, "seed": seed, "weighting_exponent": weighting_exponent}))
     exe = PARTMC_BIN["v23" if c["kernel"]["isorropia"] == "v23" else "v1"]
     env = dict(os.environ, PMC_SCRAM_THERMO_NML=str(d / "thermo.nml"))
+    env.setdefault("GFORTRAN_UNBUFFERED_ALL", "1")
     t0 = time.time()
-    with open(d / "pmc.log", "w") as log:
-        proc = subprocess.run([exe, "pmc.spec"], cwd=d, env=env, stdout=log, stderr=subprocess.STDOUT,
-                              timeout=timeout_s)
+    timed_out = False
+    log_path = d / "pmc.log"
+    with log_path.open("wb") as log:
+        proc = subprocess.Popen([exe, "pmc.spec"], cwd=d, env=env, stdout=subprocess.PIPE,
+                                stderr=subprocess.STDOUT, start_new_session=True, bufsize=0)
+        stats: dict = {}
+        reader = threading.Thread(target=_capture_partmc_output, args=(proc.stdout, log, stats), daemon=True)
+        reader.start()
+        try:
+            proc.wait(timeout=timeout_s)
+        except subprocess.TimeoutExpired:
+            timed_out = True
+            _terminate_owned_group(proc)
+        except BaseException:
+            _terminate_owned_group(proc)
+            raise
+        finally:
+            if proc.poll() is None:
+                _terminate_owned_group(proc)
+            reader.join(timeout=10)
+            if reader.is_alive():
+                _terminate_owned_group(proc)
+                proc.stdout.close()
+                reader.join(timeout=1)
+        if reader.is_alive():
+            raise RuntimeError("PartMC output reader did not finish after process cleanup")
+        if "error" in stats:
+            raise RuntimeError("PartMC output capture failed") from stats["error"]
     wall = time.time() - t0
+    if timed_out:
+        activity = progress_details(d)
+        raise TimeoutError(f"PartMC timed out after {timeout_s:g} s ({activity['output_count']}/"
+                           f"{activity['expected_output_count'] or '?'} output files, "
+                           f"{activity['log_bytes']} log bytes); " + _log_tail(log_path, 500))
     if proc.returncode != 0:
-        raise RuntimeError("PartMC failed: " + (d / "pmc.log").read_text()[-1500:])
+        raise RuntimeError("PartMC failed: " + _log_tail(log_path))
     info = project(d)
     info["summary"]["wall_s"] = wall
     info["summary"]["cpu_s"] = wall

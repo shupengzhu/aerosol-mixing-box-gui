@@ -26,24 +26,38 @@ function emptyParticles(mode, rate) {
   return { mode: "bin_mass", mixing: "internal", [km]: {}, [kn]: null };
 }
 
+function switchParticleMode(sec, next, rate) {
+  const current = S.case[sec].particles;
+  const mode = current.mode || "lognormal";
+  if (mode === next) return;
+  const drafts = S.particleModeDrafts[sec];
+  drafts[mode] = clone(current);
+  S.case[sec].particles = drafts[next] ? clone(drafts[next]) : emptyParticles(next, rate);
+  S.dirty = true;
+  S.caseDirty = true;
+  render();
+}
+
 function particleEditor(sec, rate) {
   const p = S.case[sec].particles;
   const mode = p.mode || "lognormal";
   const kn = rate ? "number_cm3_s" : "number_cm3", km = rate ? "mass_ugm3_s" : "mass_ugm3";
   const seg = h("div", { class: "seg" }, [["lognormal", t("lognormal")], ["table", t("table_mode")], ["bin_mass", t("bin_mass")]].map(([v, l]) =>
-    h("button", { class: mode === v ? "on" : "", onclick: () => { if (mode !== v) { S.case[sec].particles = emptyParticles(v, rate); S.dirty = true; render(); } } }, l)));
+    h("button", { class: mode === v ? "on" : "", onclick: () => switchParticleMode(sec, v, rate) }, l)));
   const card = h("div", { class: "card" }, h("div", { class: "row" }, h("h2", {}, t("particles")), h("span", { class: "spacer" }), h("span", { class: "muted small" }, t("particle_input")), seg));
+  card.append(h("p", { class: "sub unit-note" }, t(rate ? "number_units_rate_hint" : "number_units_hint")));
+  if (S.model === "partmc" && mode !== "lognormal") card.append(h("div", { class: "banner err", role: "alert" }, t("partmc_input_unsupported")));
   const sp = drySpecies();
   if (mode === "lognormal") {
     const modes = p.modes;
     const cols = [t("name"), t(rate ? "number_cm3_s" : "number_cm3"), t("dg"), t("sigma"), ...sp];
     const rows = modes.map((m, i) => h("tr", {},
       h("td", {}, h("input", { type: "text", class: "txt", value: m.name || "", onchange: ev => { m.name = ev.target.value; } })),
-      ...[kn, "dg_um", "sigma_g"].map(k => h("td", {}, h("input", { type: "number", step: "any", value: m[k] ?? "", onchange: ev => { m[k] = parseFloat(ev.target.value); S.dirty = true; } }))),
+      ...[kn, "dg_um", "sigma_g"].map(k => h("td", {}, h("input", { type: "number", step: "any", value: m[k] ?? "", onchange: ev => { m[k] = parseFloat(ev.target.value); S.dirty = true; S.caseDirty = true; } }))),
       ...sp.map(s => {
         const v = (m.mass_fraction || {})[s] || 0;
         const inp = h("input", { type: "number", step: "any", min: 0, value: v || "" , placeholder: "0" });
-        inp.addEventListener("change", () => { m.mass_fraction = m.mass_fraction || {}; const x = parseFloat(inp.value) || 0; if (x) m.mass_fraction[s] = x; else delete m.mass_fraction[s]; S.dirty = true; });
+        inp.addEventListener("change", () => { m.mass_fraction = m.mass_fraction || {}; const x = parseFloat(inp.value) || 0; if (x) m.mass_fraction[s] = x; else delete m.mass_fraction[s]; S.dirty = true; S.caseDirty = true; });
         return h("td", { class: v ? "" : "zero" }, inp);
       }),
       h("td", { class: "rm" }, h("button", { class: "btn ghost sm", onclick: () => { modes.splice(i, 1); render(); } }, "✕"))));
@@ -65,10 +79,13 @@ function particleEditor(sec, rate) {
     Object.keys(mass).forEach(s => { if (!mass[s] || mass[s].length !== nb) mass[s] = Array(nb).fill(0); });
     card.append(h("div", { class: "fields", style: { marginBottom: "10px" } },
       field(t("mixing_of_input"), (() => {
-        const s = h("select", { onchange: ev => { p.mixing = ev.target.value; S.dirty = true; } },
-          [["internal", t("internal")], ["by_group", t("by_group")]].map(([v, l]) => h("option", { value: v, selected: p.mixing === v ? true : null }, l)));
+        const s = h("select", { onchange: ev => { p.mixing = ev.target.value; S.dirty = true; S.caseDirty = true; render(); } },
+          [["internal", t("internal")], ["by_group", t("by_group")], ["by_group_set", t("by_group_set")]].map(([v, l]) =>
+            h("option", { value: v, selected: p.mixing === v ? true : null, disabled: v === "by_group_set" && !(p.sets && p.sets.length) ? true : null }, l)));
         return s;
       })())),
+      p.mixing === "by_group_set" ? h("div", { class: "banner mixing-sets" }, t("by_group_set_hint"),
+        h("div", { class: "mono" }, (p.sets || []).map((members, i) => `${i + 1}: ${members.join(" + ")}`).join(" | "))) : null,
       h("h3", {}, t("mass_by_bin") + (rate ? " s⁻¹" : "")),
       editTable({ rows: sp, cols: binLabels(), corner: "species \\ µm", get: (i, j) => (mass[sp[i]] || [])[j] || 0,
         set: (i, j, v) => { if (!mass[sp[i]]) mass[sp[i]] = Array(nb).fill(0); mass[sp[i]][j] = v; } }),

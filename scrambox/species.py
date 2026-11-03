@@ -182,22 +182,3 @@ def write_species_file(t: SpeciesTable, path: str | Path) -> None:
             out += _pairs(t.aerosol, t.props[sec], fmt=_num)
         out.append("")
     Path(path).write_text("\n".join(out))
-
-
-def with_groups(table: SpeciesTable, groups: list[str], group_of: dict[str, str]) -> SpeciesTable:
-    """Replace the aerosol groups (classification dimensions): `groups` in kernel order (the last
-    one is the remainder group), `group_of` maps every dry aerosol species to one group."""
-    t = copy.deepcopy(table)
-    dry = [a for a in t.aerosol if a != "PH2O"]
-    miss = [a for a in dry if a not in group_of]
-    if miss:
-        raise ValueError(f"species without group: {miss}")
-    bad = {a: g for a, g in group_of.items() if g not in groups}
-    if bad:
-        raise ValueError(f"unknown groups: {bad}")
-    empty = [g for g in groups if g not in group_of.values()]
-    if empty:
-        raise ValueError(f"empty groups: {empty}")
-    t.groups = list(groups)
-    t.group_of = {a: group_of[a] for a in dry}
-    return t

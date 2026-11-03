@@ -93,6 +93,43 @@ def conservation(res: dict, grid: dict) -> dict:
     return out
 
 
+def conservation_diagnostic(case: dict) -> dict:
+    """State when the first/last gas+particle change can be read as conservation.
+
+    This is an applicability check, not a numerical acceptance threshold. Use the
+    resolved case and the same source mapping/meteorology as compile_case.
+    """
+    from .compile import gas_vector, met_table, particles_to_sections
+    from .compile import build_grid
+
+    g = build_grid(case)
+    particle_n, particle_m, _ = particles_to_sections(
+        case["emissions"]["particles"], g, True, "emissions.particles")
+    gas_source = gas_vector(case["emissions"].get("gas_ugm3_s"), g["table"],
+                            "emissions.gas_ugm3_s")
+    met = met_table(case)
+    reasons = []
+    if np.any(met[5] != 0) and (np.any(particle_n != 0) or np.any(particle_m != 0)):
+        reasons.append("particle_emissions")
+    if np.any(met[6] != 0) and np.any(gas_source != 0):
+        reasons.append("gas_sources")
+    if np.any(met[7] != 0):
+        reasons.append("dilution")
+    if (case.get("chemistry") or {}).get("n2o5_uptake", {}).get("enabled"):
+        reasons.append("prescribed_n2o5_chemistry")
+    if case["processes"].get("soa_photolysis") and np.any(met[4] != 0):
+        reasons.append("photolysis_loss")
+    return {
+        "definition": "(last - first) / first for each condensable aerosol+gas pair; "
+                      "total is particle mass summed over all size bins and classes plus "
+                      "paired gas mass, both in ug/m3; pairs with first total <= 0 are omitted",
+        "units": "dimensionless",
+        "applicable": not reasons,
+        "reasons": reasons,
+        "pass_threshold": None,
+    }
+
+
 def run_case(user_case: dict, run_dir: str | Path, timeout_s: float = 7200) -> dict:
     run = Path(run_dir).resolve()
     info = compile_case(user_case, run)
@@ -115,7 +152,8 @@ def run_case(user_case: dict, run_dir: str | Path, timeout_s: float = 7200) -> d
     res = read_output(run / "output.txt", g["nsize"], g["nfrac"], len(sp["aerosol"]), len(sp["gases"]))
     np.savez_compressed(run / "results.npz", **{k: v for k, v in res.items() if v is not None})
     summary.update({"cpu_s": res["cpu_s"], "n_output": int(len(res["time_s"])),
-                    "conservation_rel": conservation(res, g)})
+                    "conservation_rel": conservation(res, g),
+                    "conservation_diagnostic": conservation_diagnostic(c)})
     out = {"case": c, "grid": g, "results": res, "summary": summary}
     if any((c.get("postprocess") or {}).get(k, {}).get("enabled") for k in ("optics", "ccn", "hetchem")):
         from .post import run_all

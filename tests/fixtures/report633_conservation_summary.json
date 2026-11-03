@@ -1,0 +1,19 @@
+{
+  "conservation_rel": {
+    "PSO4+SULF": 0.1620135565493058,
+    "PNH4+NH3": -1.3859837548733037e-09,
+    "PNO3+HNO3": 1.1148884370485349e-10,
+    "PHCL+HCL": 5.979181882301068e-10,
+    "PSOA1P+SOA1P": 6.825407903721876e-10,
+    "PSOA3P+SOA3P": 22.915118565280075,
+    "PSOA4P+SOA4P": 1.6567916632376664e-09,
+    "PSOA5P+SOA5P": 7.268868595978914
+  },
+  "conservation_diagnostic": {
+    "definition": "(last - first) / first for each condensable aerosol+gas pair; total is particle mass summed over all size bins and classes plus paired gas mass, both in ug/m3; pairs with first total <= 0 are omitted",
+    "units": "dimensionless",
+    "applicable": false,
+    "reasons": ["particle_emissions", "gas_sources"],
+    "pass_threshold": null
+  }
+}

@@ -6,10 +6,20 @@ function pageRun(page) {
   const nameInp = h("input", { type: "text", placeholder: t("run_name"), value: S.case ? S.case.case.name : "" });
   const pm = S.model === "partmc";
   const pmAvail = S.meta.partmc && Object.values(S.meta.partmc.available || {}).some(Boolean);
+  const pmInputIssue = pm && S.case ? ["initial", "emissions"].filter(sec =>
+    (S.case[sec].particles.mode || "lognormal") !== "lognormal") : [];
   S.pm = S.pm || Object.assign({}, (S.meta.partmc || {}).defaults || { n_part: 10000, del_t: 60, seed: 1, weighting_exponent: -1 });
   const pmField = (k, label, step) => field(label, h("input", { type: "number", step: step || "any", value: S.pm[k],
     onchange: ev => { S.pm[k] = parseFloat(ev.target.value); } }));
-  const runBtn = h("button", { class: "btn primary", disabled: S.case && (!pm || pmAvail) ? null : true, onclick: async () => {
+  const mixingSummary = sec => {
+    const particles = S.case && S.case[sec] && S.case[sec].particles;
+    if (!particles) return null;
+    const kind = particles.mixing || "internal";
+    return h("p", { class: "small muted run-mixing-summary" }, `${t(sec)}: ${t("particle_input")} = ${t(particles.mode || "lognormal")}`,
+      particles.mode === "bin_mass" ? `; ${t("mixing_of_input")} = ${t(kind)} (${kind})` : "",
+      kind === "by_group_set" ? `; ${t("sets_count")}: ${(particles.sets || []).map((members, i) => `${i + 1}=[${members.join("+")}]`).join("; ")}` : "");
+  };
+  const runBtn = h("button", { class: "btn primary", disabled: S.case && (!pm || pmAvail) && !pmInputIssue.length ? null : true, onclick: async () => {
     try {
       postCfg();
       const body = { case: S.case, name: nameInp.value, model: S.model };
@@ -27,11 +37,13 @@ function pageRun(page) {
     h("p", { class: "small faint", style: { margin: 0 } }, t("partmc_not") +
       (lim ? ` ≤ ${lim.max_partmc_part} · ${S.lang === "zh" ? "粒子数×步数" : "particles × steps"} ≤ ${fmt(lim.max_partmc_cost)}` : "")));
   const left = h("div", {},
-    h("div", { class: "card" }, h("div", { class: "field" }, nameInp), h("div", { class: "row", style: { marginTop: "8px" } }, runBtn)),
+    h("div", { class: "card" }, h("div", { class: "field" }, nameInp), mixingSummary("initial"), mixingSummary("emissions"),
+      pmInputIssue.length ? h("div", { class: "banner err", role: "alert" }, t("partmc_input_unsupported") + ` (${pmInputIssue.map(t).join(" / ")})`) : null,
+      h("div", { class: "row", style: { marginTop: "8px" } }, runBtn)),
     pmCard,
     h("div", { class: "card" }, h("h3", { style: { marginTop: 0 } }, t("runs")), runList()));
   const right = h("div");
-  page.append(h("div", { class: "side", style: { gridTemplateColumns: "280px minmax(0,1fr)" } }, left, right));
+  page.append(h("div", { class: "side run-layout" }, left, right));
   if (S.runId) showRun(right);
   else right.append(h("div", { class: "card empty" }, t("no_runs")));
 }
@@ -42,24 +54,50 @@ function runList() {
     h("div", { class: "n" }, r.model === "partmc" ? h("span", { class: "chip accent", style: { marginRight: "6px", padding: "0 6px" } }, "PartMC") : null, r.name || r.id),
     h("div", { class: "m" }, h("span", { class: "dot " + r.state }), r.state, r.cpu_s ? `${fmt(r.cpu_s)} s` : "", h("span", { class: "spacer" }),
       h("button", { class: "btn ghost sm", title: t("delete"), onclick: async ev => { ev.stopPropagation(); await api("runs/" + r.id, "DELETE"); if (S.runId === r.id) S.runId = null; await refreshRuns(); render(); } }, "✕")),
+    partmcProgress(r, false),
     ["running", "queued"].includes(r.state) ? h("div", { class: "bar" }, h("i", { style: { width: ((r.progress || 0) * 100).toFixed(0) + "%" } })) : null)));
+}
+
+function partmcProgress(run, detailed) {
+  if (run.model !== "partmc" || !Number.isFinite(run.output_count)) return null;
+  const expected = Number.isFinite(run.expected_output_count) ? ` / ${run.expected_output_count}` : "";
+  const parts = [`${run.output_count}${expected} ${t("partmc_outputs")}`];
+  if (Number.isFinite(run.elapsed_s)) parts.push(`${t("partmc_elapsed")} ${fmt(run.elapsed_s)} s`);
+  if (detailed && Number.isFinite(run.last_output_age_s))
+    parts.push(`${t("partmc_last_output")} ${fmt(run.last_output_age_s)} ${t("seconds_ago")}`);
+  if (detailed && Number.isFinite(run.log_bytes)) parts.push(`${t("partmc_log_size")} ${run.log_bytes} B`);
+  const title = detailed && Number.isFinite(run.last_output_at) ? new Date(run.last_output_at * 1000).toLocaleString() : "";
+  return h("div", { class: "small muted partmc-progress", title }, parts.join(" · "));
 }
 
 async function refreshRuns() { S.runs = await api("runs"); }
 
 async function showRun(box) {
-  const st = S.runs.find(r => r.id === S.runId) || {};
+  const runId = S.runId;
+  const st = S.runs.find(r => r.id === runId) || {};
   if (st.state !== "done") {
     box.append(h("div", { class: "card" }, h("h2", {}, st.name || S.runId), h("div", { class: "row" }, h("span", { class: "dot " + st.state }), st.state),
       st.error ? h("pre", { class: "banner err mono", style: { whiteSpace: "pre-wrap" } }, st.error) : null,
+      partmcProgress(st, true),
       ["running", "queued"].includes(st.state) ? h("div", { class: "bar" }, h("i", { style: { width: ((st.progress || 0) * 100).toFixed(0) + "%" } })) : null));
     return;
   }
   if (!S.results || S.results.id !== S.runId) {
     box.append(h("div", { class: "card empty" }, "…"));
-    S.results = await api(`runs/${S.runId}/results`);
-    S.tIndex = S.results.time_s.length - 1;
-    return render();
+    try {
+      const result = await api(`runs/${runId}/results`);
+      if (S.runId !== runId) return;
+      if (!Array.isArray(result.time_s)) throw new Error(t("invalid_results_shape"));
+      S.results = result;
+      S.tIndex = result.time_s.length - 1;
+      return render();
+    } catch (e) {
+      if (S.runId !== runId) return;
+      box.innerHTML = "";
+      box.append(h("div", { class: "card" }, h("div", { class: "banner err", role: "alert" }, `${t("results_load_error")}: ${e.message}`),
+        h("button", { class: "btn sm", onclick: () => render() }, t("retry"))));
+      return;
+    }
   }
   const R = S.results;
   const subs = [["overview", "overview"], ["size", "sizedist"], ["mix", "mixstate"], ["optics", "optics"], ["ccn", "ccn"], ["het", "hetchem"]];
@@ -72,10 +110,29 @@ async function showRun(box) {
       h("button", { class: "btn sm", onclick: () => download(R, `${R.id}.json`) }, t("download")),
       h("button", { class: "btn sm", onclick: async () => { const c = await api(`runs/${R.id}/case`); await loadCase(c); toast(t("loaded")); } }, t("load_editor"))),
     R.notes && R.notes.length ? h("div", { class: "banner", style: { marginTop: "10px" } }, R.notes.join(" · ")) : null,
+    conservationCard(R.summary),
     h("div", { class: "subtabs", style: { marginTop: "12px" } }, subs.map(([id, k]) => h("button", { class: S.resSub === id ? "on" : "", onclick: () => { S.resSub = id; render(); } }, t(k))))));
   const body = h("div");
   box.append(body);
   ({ overview: resOverview, size: resSize, mix: resMix, optics: resOptics, ccn: resCcn, het: resHet, particles: resParticles })[S.resSub](body, R);
+}
+
+function conservationCard(summary) {
+  const diagnostic = summary && summary.conservation_diagnostic;
+  const raw = summary && summary.conservation_rel;
+  if (!diagnostic || !raw || typeof raw !== "object" || Array.isArray(raw)) return null;
+  const pairs = Object.entries(raw).filter(([, value]) => Number.isFinite(value));
+  const reasons = (diagnostic.reasons || []).map(reason => {
+    const key = `conservation_reason_${reason}`;
+    return t(key) === key ? reason.replaceAll("_", " ") : t(key);
+  });
+  const status = diagnostic.applicable ? t("conservation_applicable") :
+    `${t("conservation_not_applicable")}: ${reasons.join(", ")}`;
+  return h("div", { class: "banner small conservation-diagnostic", role: "note", style: { marginTop: "10px" } },
+    h("strong", {}, `${t("conservation_title")} (${t("conservation_unitless")})`),
+    pairs.length ? h("div", { class: "mono", style: { marginTop: "6px" } },
+      pairs.map(([pair, value]) => h("div", {}, `${pair}: ${fmt(value)}`))) : null,
+    h("div", {}, t("conservation_definition")), h("div", {}, status));
 }
 
 // ---------------------------------------------------------------- PartMC particle-resolved view
@@ -133,8 +190,14 @@ function resParticles(body, R) {
 }
 
 function download(obj, name) {
-  const a = h("a", { href: URL.createObjectURL(new Blob([JSON.stringify(obj)], { type: "application/json" })), download: name });
-  document.body.append(a); a.click(); a.remove();
+  try {
+    const json = JSON.stringify(obj);
+    if (!json) throw new Error(t("invalid_results_shape"));
+    const url = URL.createObjectURL(new Blob([json], { type: "application/json" }));
+    const a = h("a", { href: url, download: name });
+    document.body.append(a); a.click(); a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+  } catch (e) { toast(`${t("download_error")}: ${e.message}`, 6000); }
 }
 
 const th = R => R.time_s.map(x => x / 3600);
@@ -320,7 +383,7 @@ function pageExp(page) {
     h("div", { class: "n" }, e.name || e.id), h("div", { class: "m" }, h("span", { class: "dot " + e.state }), e.state, (e.variants || []).length + " " + t("variants"), h("span", { class: "spacer" }),
       h("button", { class: "btn ghost sm", onclick: async ev => { ev.stopPropagation(); await api("experiments/" + e.id, "DELETE"); if (S.expId === e.id) S.expId = null; await refreshExps(); render(); } }, "✕")))) : h("div", { class: "faint small" }, t("no_runs")));
   const right = h("div");
-  page.append(h("div", { class: "side", style: { gridTemplateColumns: "280px minmax(0,1fr)" } }, h("div", { class: "card" }, h("h3", { style: { marginTop: 0 } }, t("experiments")), list), right));
+  page.append(h("div", { class: "side run-layout" }, h("div", { class: "card" }, h("h3", { style: { marginTop: 0 } }, t("experiments")), list), right));
   if (S.expId) showExp(right);
 }
 
@@ -421,7 +484,7 @@ async function init() {
     S.describe = await api("describe", "POST", S.scenario.case).catch(e => ({ error: e.message }));
   }
   try { if (draft) await loadCase(draft); } catch (e) { draft = null; }
-  if (!draft && S.scenario) await loadCase(S.scenario.case);
+  if (!draft && S.scenario) await loadCase(S.scenario.case, S.scenario.id);
   render();
   poll();
 }

@@ -31,7 +31,7 @@ DEFAULTS = {
                   "nucleation": {"enabled": False, "model": "binary"},
                   "sulfate": "dynamic", "thermodynamics": "dynamic", "dynamic_solver": "etr",
                   "redistribution_method": 3, "redistribution": "moving_center_dualpivot",
-                  "class_redistribution": "whole", "class_split_alpha": 1.0,
+                  "class_redistribution": "whole",
                   "wet_diameter": "isorropia", "density": {"mode": "variable", "fixed_kgm3": 1400.0},
                   "soa_photolysis": True},
     "advanced": {"bc_core_floor_um": 0.05, "salt_core_floor_um": 0.05, "dust_core_floor_um": 0.90,
@@ -60,7 +60,7 @@ ENUMS = {
     "processes.redistribution": ["legacy", "core_conserv", "core_nogrow", "core_smallgrow",
                                  "core_fluxform", "core_ppm", "core_ppm_dualmoment",
                                  "core_ppm_cutnum", "moving_center_dualpivot"],
-    "processes.class_redistribution": ["whole", "split"],
+    "processes.class_redistribution": ["whole"],
     "processes.wet_diameter": ["isorropia", "gerber"],
     "processes.nucleation.model": ["binary", "ternary"],
     "mixing.preset": ["NC1", "NC6", "NC11", "NC21", "NC9BC", "custom", "explicit"],
@@ -108,6 +108,9 @@ def substep_default(case: dict) -> float:
 def resolve(user_case: dict) -> dict:
     """Merge with defaults, fill derived defaults, validate; raises ValueError."""
     c = deep_merge(DEFAULTS, user_case)
+    if c["processes"].get("class_redistribution") == "split":
+        raise ValueError("processes.class_redistribution='split' is unsupported by the current "
+                         "pinned SCRAM kernel; choose 'whole'")
     errs = []
     for path, allowed in ENUMS.items():
         try:

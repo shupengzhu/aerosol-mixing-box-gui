@@ -26,11 +26,7 @@ SOLVER = {"euler": 0, "etr": 1, "ros2": 2}
 
 def species_table(c: dict) -> sp.SpeciesTable:
     profile = "noiso" if c["kernel"]["isorropia"] == "none" else "iso"
-    t = sp.with_custom_species(sp.library(profile), c["species"].get("custom", []))
-    g = c["species"].get("groups")
-    if g:
-        t = sp.with_groups(t, g["groups"], g["group_of"])
-    return t
+    return sp.with_custom_species(sp.library(profile), c["species"].get("custom", []))
 
 
 def build_grid(c: dict) -> dict:
@@ -305,10 +301,6 @@ def compile_case(user_case: dict, run_dir: str | Path) -> dict:
             "nucl_h2so4_gas_fraction_max": a["nucl_h2so4_gas_fraction_max"],
             "nucl_nh3_gas_fraction_max": a["nucl_nh3_gas_fraction_max"],
             "soa_photolysis": int(bool(p.get("soa_photolysis", True))),
-            # written only when used, so kernels built before the option still read the namelist
-            # split: assumed composition spread alpha (fraction of the class width), in per mille
-            **({"class_split": max(1, round(1000 * min(1.0, max(0.001, float(p.get("class_split_alpha", 1.0))))))}
-               if p.get("class_redistribution", "whole") == "split" else {}),
         },
         "box_ids": {"sid_pmd": ids["PMD"], "sid_pbc": ids["PBC"], "sid_pna": ids["PNA"],
                     "sid_pso4": ids["PSO4"], "sid_pnh4": ids["PNH4"], "sid_pno3": ids["PNO3"],

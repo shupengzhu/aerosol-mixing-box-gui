@@ -79,8 +79,8 @@ def check_partition(classes, groups: list[str] | None = None) -> list[str]:
     sampling). Raises ValueError naming the first region in no class or in several classes;
     returns notes on classes that contain no composition."""
     tol = 1e-12
-    if len(classes) <= 1:
-        return []
+    if not classes:
+        raise ValueError("composition classes: the list is empty")
     ng = len(classes[0])
     nd = ng - 1
     names = groups or [f"group {g + 1}" for g in range(ng)]
@@ -88,7 +88,7 @@ def check_partition(classes, groups: list[str] | None = None) -> list[str]:
         if len(cls) != ng:
             raise ValueError(f"class {c}: wrong number of groups")
         for g, (lo, hi) in enumerate(cls):
-            if not (lo >= -tol and hi <= 1 + tol and hi > lo + tol):
+            if not (0.0 <= lo < hi <= 1.0) or hi - lo <= tol:
                 raise ValueError(f"class {c}, {names[g]}: need 0 <= lo < hi <= 1")
         if abs(cls[-1][0]) > tol or abs(cls[-1][1] - 1.0) > tol:
             raise ValueError(f"class {c}: the last group ({names[-1]}, remainder) must be [0, 1]")
@@ -102,6 +102,9 @@ def check_partition(classes, groups: list[str] | None = None) -> list[str]:
         bps.append(u)
     used = [False] * len(classes)
     for idx in itertools.product(*[range(len(b) - 1) for b in bps]):
+        # A cell intersects the composition simplex whenever its lower-corner
+        # sum is below one by the existing tolerance. Its midpoint may be outside while a triangular
+        # part of the cell is feasible, so midpoint sampling misses real gaps.
         if sum(bps[d][i] for d, i in enumerate(idx)) >= 1.0 - tol:
             continue
         hits = [c for c, cls in enumerate(classes)

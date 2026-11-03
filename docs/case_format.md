@@ -201,6 +201,21 @@ ssh -L 8765:localhost:8765 <server>              # 本地浏览器打开 http://
 python3 -m scrambox run scenarios/dust_crustal.json -o runs/dust   # 命令行
 ```
 
+
+### 7.1 `conservation_rel` 的口径与适用边界
+
+SCRAM 的 `summary.conservation_rel` 对每个有气相配对的凝结性气溶胶物种计算
+`(末时刻总量 - 初时刻总量) / 初时刻总量`。总量是所有粒径段、类群中的颗粒质量之和，
+再加配对气体的质量浓度，单位均为 µg/m³；初始总量不大于零的配对不列出。
+该值是无量纲首末相对变化，**并非无条件的质量守恒误差或通过/失败判据**。
+
+`summary.conservation_diagnostic` 给出上述定义、`applicable`、`reasons` 与空的
+`pass_threshold`。只有无颗粒排放、无气体源、无稀释及相关外部损失/指定化学源的闭盒情景，
+才可进一步将 `conservation_rel` 用作守恒诊断；即使 `applicable=true`，也没有预设
+科学合格阈值。开放情景中保留原始 `conservation_rel` 供比较，但应同时查看
+`reasons`，不能把较大值直接解释为内核不守恒。Urban plume aging 含颗粒排放、
+可凝气体源和稀释，属于开放情景。
+
 ## 8. 状态与后续
 
 已完成：内核驱动、编译器、11 个情景、三个后处理模块、在线 N2O5 吸收（HNO3 / ClNO2 回到热力学）、

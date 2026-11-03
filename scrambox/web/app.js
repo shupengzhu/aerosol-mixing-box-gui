@@ -8,6 +8,7 @@ const S = {
   case: null, grid: null, tab: "scenario", setupSub: "kernel", inSub: "initial",
   runs: [], runId: null, results: null, resSub: "overview", tIndex: -1,
   exps: [], expId: null, expData: null, variants: [], dirty: false,
+  particleModeDrafts: { initial: {}, emissions: {} }, manualBounds: null, loadedScenarioId: null,
   model: (new URLSearchParams(location.search).get("model")) || localStorage.getItem("sb_model") || "scram",
   pm: null, pIndex: -1, particles: null,
 };
@@ -51,8 +52,10 @@ function toast(msg, ms = 2600) {
   clearTimeout(e._t); e._t = setTimeout(() => e.classList.remove("show"), ms);
 }
 async function api(path, method = "GET", body) {
-  const r = await fetch("/api/" + path, { method, headers: { "Content-Type": "application/json" }, body: body ? JSON.stringify(body) : undefined });
-  const j = await r.json().catch(() => ({ error: r.statusText }));
+  const r = await fetch("api/" + path, { method, headers: { "Content-Type": "application/json" }, body: body ? JSON.stringify(body) : undefined });
+  let j;
+  try { j = await r.json(); }
+  catch (e) { throw new Error(`${t("invalid_json_response")} (${path}, HTTP ${r.status})`); }
   if (r.status === 401 && j.login && path !== "login") { showLogin(); throw new Error(j.error); }
   if (!r.ok) throw new Error(j.error || r.statusText);
   return j;
@@ -140,7 +143,7 @@ function editTable({ rows, cols, get, set, corner = "", rowExtra, onRemoveRow, c
       inp.addEventListener("change", () => {
         const x = inp.value === "" ? 0 : parseFloat(inp.value);
         if (!isFinite(x)) { inp.classList.add("bad"); return; }
-        inp.classList.remove("bad"); td.className = x === 0 ? "zero" : ""; set(i, j, x); S.dirty = true;
+        inp.classList.remove("bad"); td.className = x === 0 ? "zero" : ""; set(i, j, x); S.dirty = true; S.caseDirty = true;
       });
       return td;
     }),
@@ -164,6 +167,7 @@ const refreshGrid = debounce(async () => {
 }, 250);
 function changed(path) {
   S.dirty = true;
+  S.caseDirty = true;
   if (GRID_KEYS.some(k => path.startsWith(k))) refreshGrid();
   updateKernelChip();
 }
@@ -172,8 +176,13 @@ function updateKernelChip() {
   const k = S.case.kernel.isorropia;
   $("#kernelChip").textContent = `${S.model === "partmc" ? "PartMC · " : ""}${k === "v23" ? "ISORROPIA II 2.3" : k === "v1" ? "ISORROPIA v1" : "no-ISO"} · ${S.case.mixing.preset} · ${S.case.case.name || ""}`;
 }
-async function loadCase(c) {
+async function loadCase(c, scenarioId = null) {
   S.case = deepMerge(S.meta.defaults, c);
+  S.particleModeDrafts = { initial: {}, emissions: {} };
+  S.manualBounds = S.case.size_bins.mode === "explicit" ? clone(S.case.size_bins.bounds_um) : null;
+  S.loadedScenarioId = scenarioId;
+  S.caseDirty = false;
+  S.dirty = false;
   ["initial", "emissions"].forEach(sec => {
     if (!S.case[sec].particles) S.case[sec].particles = { mode: "lognormal", modes: [] };
   });
@@ -230,9 +239,11 @@ function pageScenario(page) {
   }
   async function choose(id) {
     combo.classList.remove("open");
-    S.scenario = await api("scenarios/" + id);
-    S.describe = await api("describe", "POST", S.scenario.case).catch(e => ({ error: e.message }));
-    render();
+    try {
+      S.scenario = await api("scenarios/" + id);
+      S.describe = await api("describe", "POST", S.scenario.case).catch(e => ({ error: e.message }));
+      render();
+    } catch (e) { toast(e.message, 6000); }
   }
   input.addEventListener("focus", () => { input.select(); hl = 0; fill(); combo.classList.add("open"); });
   input.addEventListener("input", () => { hl = 0; fill(); combo.classList.add("open"); });
@@ -247,13 +258,18 @@ function pageScenario(page) {
   page.append(h("div", { class: "card" }, h("h2", {}, t("scenario_library")), h("p", { class: "sub" }, t("scenario_hint")), combo));
   if (!S.scenario) return;
   const s = S.scenario, d = S.describe || {};
-  const actions = h("div", { class: "row" },
-    h("button", { class: "btn primary", onclick: async () => { await loadCase(s.case); toast(t("loaded")); S.tab = "setup"; render(); } }, t("load_editor")),
+  const actions = h("div", { class: "row scenario-actions" },
+    h("button", { class: "btn primary", onclick: async () => { try { await loadCase(s.case, s.id); toast(t("loaded")); S.tab = "setup"; render(); } catch (e) { toast(e.message, 6000); } } }, t("load_editor")),
     h("button", { class: "btn", onclick: saveScenarioDialog }, t("save_my")),
     s.builtin ? null : h("button", { class: "btn danger", onclick: async () => { await api("scenarios/" + s.id, "DELETE"); S.scenario = null; await reloadScenarios(); render(); } }, t("delete")));
+  const loaded = S.loadedScenarioId === s.id;
   page.append(h("div", { class: "card" },
     h("div", { class: "row" }, h("h2", {}, L(s.name)), h("span", { class: "chip accent" }, L(cats[s.category]) || s.category),
-      (s.tags || []).map(x => h("span", { class: "chip" }, x)), h("span", { class: "spacer" }), actions),
+      (s.tags || []).map(x => h("span", { class: "chip" }, x)), h("span", { class: "spacer" }),
+      h("span", { class: "chip " + (loaded ? "ok" : "warn") }, t(loaded ? "scenario_loaded" : "scenario_selected_only"))),
+    h("p", { class: "sub scenario-status" }, loaded ? t(S.caseDirty ? "scenario_loaded_modified" : "scenario_loaded_hint") : t("scenario_selected_hint") +
+      (S.case ? ` ${t("editor_current")}: ${S.case.case.name || t("none")}.` : "")),
+    actions,
     h("p", { style: { margin: "10px 0 6px" } }, L(s.summary)),
     s.case.case && s.case.case.reference ? h("div", { class: "small muted" }, t("reference") + ": " + s.case.case.reference) : null,
     s.notes && s.notes.length ? h("details", { style: { marginTop: "8px" } }, h("summary", {}, t("notes") + ` (${s.notes.length})`), h("ul", { class: "notes" }, s.notes.map(n => h("li", {}, n)))) : null));
@@ -307,7 +323,7 @@ function saveScenarioDialog() {
     h("div", { class: "row", style: { marginTop: "16px", justifyContent: "flex-end" } },
       h("button", { class: "btn", onclick: () => dlg.close() }, t("cancel")),
       h("button", { class: "btn primary", onclick: async () => {
-        if (!S.case) await loadCase(S.scenario.case);
+        if (!S.case) await loadCase(S.scenario.case, S.scenario.id);
         const c = clone(S.case); c.case.name = en.value || zh.value || "my scenario";
         try {
           const s = await api("scenarios", "POST", { name: { en: en.value || zh.value, zh: zh.value || en.value }, summary: { en: sm.value, zh: sm.value },
@@ -355,10 +371,10 @@ function setupKernel(body) {
     h("details", { style: { marginTop: "14px" } }, h("summary", {}, t("advanced")),
       h("div", { class: "fields", style: { marginTop: "10px" } },
         ["bc_core_floor_um", "salt_core_floor_um", "dust_core_floor_um", "nucl_rate_cap_cm3_s", "nucl_h2so4_gas_fraction_max", "nucl_nh3_gas_fraction_max"]
-          .map(k => field(k, num("advanced." + k))),
-        field("fixed density (kg/m³)", num("processes.density.fixed_kgm3"))),
+          .map(k => field(t(k), num("advanced." + k), t(k + "_hint") + ` (${t("default_value")}: ${S.meta.defaults.advanced[k]})`)),
+        field(t("fixed_density_kgm3"), num("processes.density.fixed_kgm3"), t("fixed_density_hint") + ` (${t("default_value")}: ${S.meta.defaults.processes.density.fixed_kgm3})`)),
       h("div", { class: "row", style: { gap: "22px", marginTop: "10px" } },
-        ["salt_rdb_bidirectional", "salt_fix_size_rdb", "dust_fix_size_rdb"].map(k => toggle("advanced." + k, k))))),
+        ["salt_rdb_bidirectional", "salt_fix_size_rdb", "dust_fix_size_rdb"].map(k => h("span", { title: t(k + "_hint") + ` (${t("default_value")}: ${S.meta.defaults.advanced[k]})` }, toggle("advanced." + k, t(k))))))),
     hetCard(),
     h("div", { class: "card" }, h("h2", {}, "Kernel build"),
       ["v1", "v23"].map(v => h("details", {}, h("summary", {}, `${v}: ${kv[v].available ? "available" : "missing"}`), h("pre", { class: "mono small" }, kv[v].version)))));
@@ -498,8 +514,9 @@ function setupBins(body) {
   const sb = S.case.size_bins;
   const mode = sb.mode === "explicit" ? "explicit" : "log";
   const seg = h("div", { class: "seg" }, [["log", t("log_auto")], ["explicit", t("manual")]].map(([v, l]) => h("button", { class: mode === v ? "on" : "", onclick: () => {
-    if (v === "log") { const b = S.grid.bounds_um; S.case.size_bins = { mode: "log", n: b.length - 1, dmin_um: b[0], dmax_um: b[b.length - 1] }; }
-    else S.case.size_bins = { mode: "explicit", bounds_um: S.grid.bounds_um.map(x => +x.toPrecision(5)) };
+    if (v === mode) return;
+    if (v === "log") { S.manualBounds = clone(sb.bounds_um); const b = S.grid.bounds_um; S.case.size_bins = { mode: "log", n: b.length - 1, dmin_um: b[0], dmax_um: b[b.length - 1] }; }
+    else S.case.size_bins = { mode: "explicit", bounds_um: S.manualBounds ? clone(S.manualBounds) : clone(S.grid.bounds_um) };
     changed("size_bins"); render();
   } }, l)));
   const card = h("div", { class: "card" }, h("h2", {}, t("size_bins")), h("div", { class: "row" }, h("span", { class: "muted small" }, t("bins_mode")), seg));
