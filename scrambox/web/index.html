@@ -1,0 +1,36 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>SCRAM Box</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<header class="topbar">
+  <div class="brand"><span class="logo"></span><div><span id="brandName">SCRAM Box</span><br><small id="brandSub" data-t="app_sub"></small></div></div>
+  <nav class="tabs" id="tabs"></nav>
+  <div class="top-actions">
+    <div class="seg" id="modelSeg"><button data-model="scram" data-t="model_scram"></button><button data-model="partmc" data-t="model_partmc"></button></div>
+    <span class="chip-kernel" id="kernelChip"></span>
+    <div class="seg" id="langSeg"><button data-lang="zh">中</button><button data-lang="en">EN</button></div>
+    <button class="btn ghost sm" id="themeBtn" title="theme">◐</button>
+  </div>
+</header>
+<main>
+  <section class="page" id="page-scenario"></section>
+  <section class="page" id="page-setup"></section>
+  <section class="page" id="page-inputs"></section>
+  <section class="page" id="page-post"></section>
+  <section class="page" id="page-run"></section>
+  <section class="page" id="page-exp"></section>
+</main>
+<dialog id="dlg"></dialog>
+<div class="toast" id="toast"></div>
+<script src="i18n.js"></script>
+<script src="charts.js"></script>
+<script src="app.js"></script>
+<script src="app_inputs.js"></script>
+<script src="app_results.js"></script>
+</body>
+</html>

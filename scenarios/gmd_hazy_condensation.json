@@ -1,0 +1,122 @@
+{
+ "id": "gmd_hazy_condensation",
+ "category": "gmd_validation",
+ "name": {
+  "en": "GMD hazy condensation validation",
+  "zh": "GMD hazy 冷凝验证"
+ },
+ "summary": {
+  "en": "Hazy tri-modal distribution (Seigneur et al., 1986), externally mixed half sulfate / half BC by volume, sulfuric acid produced at 2.29e-4 ug/m3/s for 12 h, 298 K, 1 atm, RH 70%.",
+  "zh": "Seigneur et al. (1986) hazy 三模态分布，按体积一半硫酸盐一半 BC 外混，硫酸气体以 2.29e-4 ug/m3/s 生成 12 小时，298 K、1 atm、RH 70%。"
+ },
+ "tags": [
+  "validation",
+  "condensation",
+  "sulfate",
+  "BC"
+ ],
+ "notes": [
+  "Legacy template used 4 size sections and 2 composition sections; here 4 log sections 0.01-10 um and the NC6 classes (sulfate and BC fall in separate classes). Increase the number of sections for a converged reference.",
+  "Hazy modes converted from volume median diameter and volume to number median diameter and number (Hatch-Choate)."
+ ],
+ "case": {
+  "case": {
+   "reference": "Zhu, Sartelet and Seigneur (2015), GMD 8, 1595-1612, section 3",
+   "name": "GMD hazy condensation validation",
+   "scenario_id": "gmd_hazy_condensation",
+   "category": "gmd_validation"
+  },
+  "kernel": {
+   "isorropia": "none"
+  },
+  "environment": {
+   "temperature_K": 298.0,
+   "pressure_Pa": 101325.0,
+   "relative_humidity": 0.7
+  },
+  "time": {
+   "duration_s": 43200.0,
+   "dt_s": 600.0,
+   "output_every_s": 1800.0
+  },
+  "mixing": {
+   "preset": "NC6"
+  },
+  "size_bins": {
+   "mode": "log",
+   "n": 4,
+   "dmin_um": 0.01,
+   "dmax_um": 10.0
+  },
+  "initial": {
+   "particles": {
+    "mode": "lognormal",
+    "modes": [
+     {
+      "name": "sulfate nuclei",
+      "number_cm3": 1171.709303,
+      "dg_um": 0.039824,
+      "sigma_g": 1.2,
+      "mass_fraction": {
+       "PSO4": 1.0
+      }
+     },
+     {
+      "name": "sulfate accumulation",
+      "number_cm3": 1896.582047,
+      "dg_um": 0.085128,
+      "sigma_g": 1.8,
+      "mass_fraction": {
+       "PSO4": 1.0
+      }
+     },
+     {
+      "name": "sulfate coarse",
+      "number_cm3": 1.878248,
+      "dg_um": 0.929382,
+      "sigma_g": 2.2,
+      "mass_fraction": {
+       "PSO4": 1.0
+      }
+     },
+     {
+      "name": "BC nuclei",
+      "number_cm3": 1171.709303,
+      "dg_um": 0.039824,
+      "sigma_g": 1.2,
+      "mass_fraction": {
+       "PBC": 1.0
+      }
+     },
+     {
+      "name": "BC accumulation",
+      "number_cm3": 1896.582047,
+      "dg_um": 0.085128,
+      "sigma_g": 1.8,
+      "mass_fraction": {
+       "PBC": 1.0
+      }
+     },
+     {
+      "name": "BC coarse",
+      "number_cm3": 1.878248,
+      "dg_um": 0.929382,
+      "sigma_g": 2.2,
+      "mass_fraction": {
+       "PBC": 1.0
+      }
+     }
+    ]
+   }
+  },
+  "emissions": {
+   "gas_ugm3_s": {
+    "SULF": 0.000229
+   }
+  },
+  "processes": {
+   "coagulation": false,
+   "condensation": true
+  }
+ }
+}

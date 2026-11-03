@@ -1,0 +1,260 @@
+{
+ "id": "gmd_paris_emission_only",
+ "category": "gmd_reference",
+ "name": {
+  "en": "GMD Greater Paris scenario A (emission only)",
+  "zh": "GMD 巴黎场景 A（仅排放）"
+ },
+ "summary": {
+  "en": "Greater Paris reference case of Zhu et al. (2015), scenario A: emission only. Polyphemus-derived initial particles in 7 sections, BC and dust emissions, sulfuric acid and organic vapour sources, 12 h.",
+  "zh": "Zhu et al. (2015) 巴黎参考场景 A：仅排放。Polyphemus 提取的 7 个粒径段初始颗粒、BC 与沙尘排放、硫酸与有机气体源，12 小时。"
+ },
+ "tags": [
+  "Paris",
+  "emission",
+  "reference"
+ ],
+ "notes": [
+  "Legacy H2O organic species mapped to the CESM VBS bin nearest to log10 C* (298 K): BiA2D->PSOA5P (C*=160), BiA1D->PSOA5P (C*=366.3), BiA0D->PSOA5P (C*=20746.9), GLYOXAL->PSOA5P (C*=1524.39), MGLY->PSOA5P (C*=1.7301e+11), BiMT->PSOA3P (C*=1.2419), BiPER->PSOA4P (C*=9.0171), BiDER->PSOA3P (C*=0.3571), BiMGA->PSOA5P (C*=88.6446), AnBlP->PSOA3P (C*=0.6111), AnBmP->PSOA5P (C*=68.7066), BiBlP->PSOA1P (C*=0.0096), BiBmP->PSOA4P (C*=3.8099), BiNGA->PSOA5P (C*=123.417), NIT3->PSOA4P (C*=21.2233), BiNIT->PSOA4P (C*=28.9237), AnClP->PSOA1P (C*=0.018), SOAlP->PSOA1P (C*=0.0091), SOAmP->PSOA3P (C*=0.8621), SOAhP->PSOA5P (C*=32.2581), POAlP->PPOAlP (C*=0.9091), POAmP->PPOAlP (C*=86.2069), POAhP->PPOAlP (C*=3225.81)",
+  "Particulate POA is mapped to the non-volatile CESM POA (PPOAlP); POA gas and its emissions are mapped to the VBS gas bin of the same C* (SVOC).",
+  "Initial particles: legacy SCRAM external start; dust, BC, inorganic and organic populations are separate classes, number split by volume.",
+  "Legacy solver ROS2 and redistribution 'moving diameter' replaced by the SCRAM defaults (ETR, moving-center dual pivot).",
+  "BiA0D: C*=2.07e+04 ug/m3 > 1000, gas phase (0.000158 ug/m3, emission 0 ug/m3/s) not represented",
+  "MGLY: C*=1.73e+11 ug/m3 > 1000, gas phase (0.184 ug/m3, emission 0 ug/m3/s) not represented",
+  "POAhP: C*=3.23e+03 ug/m3 > 1000, gas phase (2.42 ug/m3, emission 0.00157 ug/m3/s) not represented"
+ ],
+ "case": {
+  "case": {
+   "name": "GMD Greater Paris scenario A (emission only)",
+   "reference": "Zhu, Sartelet and Seigneur (2015), GMD 8, 1595-1612, section 4",
+   "scenario_id": "gmd_paris_emission_only",
+   "category": "gmd_reference"
+  },
+  "kernel": {
+   "isorropia": "v23"
+  },
+  "environment": {
+   "temperature_K": 279.553955078,
+   "pressure_Pa": 79805.765625,
+   "relative_humidity": 0.745575904846
+  },
+  "time": {
+   "duration_s": 43200.0,
+   "dt_s": 600.0,
+   "output_every_s": 1800.0
+  },
+  "mixing": {
+   "preset": "NC6"
+  },
+  "size_bins": {
+   "mode": "explicit",
+   "bounds_um": [
+    0.001,
+    0.00316,
+    0.01,
+    0.0398,
+    0.1585,
+    0.631,
+    2.5119,
+    10.0
+   ]
+  },
+  "initial": {
+   "particles": {
+    "mode": "bin_mass",
+    "mixing": "by_group_set",
+    "sets": [
+     [
+      "PMD"
+     ],
+     [
+      "PBC"
+     ],
+     [
+      "PNA",
+      "PSO4",
+      "PNH4",
+      "PNO3",
+      "PHCL"
+     ],
+     [
+      "PSOA1P",
+      "PSOA2P",
+      "PSOA3P",
+      "PSOA4P",
+      "PSOA5P",
+      "PPOAlP"
+     ]
+    ],
+    "number_cm3": [
+     0.005895412,
+     1.13838625,
+     5265.435136,
+     8862.283776,
+     492.587168,
+     3.59843575,
+     0.0136576796875
+    ],
+    "mass_ugm3": {
+     "PMD": [
+      1e-15,
+      5.815e-12,
+      6.54694247e-07,
+      0.150394171476,
+      1.30960583687,
+      1.78676152229,
+      1.07002174854
+     ],
+     "PBC": [
+      4e-15,
+      6.1402e-11,
+      0.0153744360432,
+      0.220083221793,
+      0.843515992165,
+      0.624725580215,
+      0.0312604494393
+     ],
+     "PNA": [
+      0.0,
+      4.45e-13,
+      4.2323499e-08,
+      0.00142551504541,
+      0.122185088694,
+      0.463657706976,
+      0.0248505901545
+     ],
+     "PSO4": [
+      1.062e-12,
+      2.5145102e-08,
+      0.00195511663333,
+      0.165135219693,
+      3.2797396183,
+      1.08144080639,
+      0.0616511851549
+     ],
+     "PNH4": [
+      8.608e-12,
+      1.72809678e-07,
+      0.0115803396329,
+      0.780958533287,
+      0.850924491882,
+      0.0343741178513,
+      0.00148804776836
+     ],
+     "PNO3": [
+      4.083e-12,
+      7.7640408e-08,
+      0.00537681253627,
+      0.183640256524,
+      0.145689919591,
+      0.00693256594241,
+      0.00026601247373
+     ],
+     "PHCL": [
+      0.0,
+      7.96e-13,
+      7.5843559e-08,
+      0.0025532306172,
+      0.218745335937,
+      0.785844743252,
+      0.0420205518603
+     ],
+     "PSOA5P": [
+      7.337e-12,
+      1.12239591e-07,
+      0.007391743347403,
+      0.651333504825786,
+      1.923711463814914,
+      0.199184774726678,
+      0.012455618380484
+     ],
+     "PSOA3P": [
+      6.31e-13,
+      4.9113688e-08,
+      0.004176231546036,
+      0.499081444795485,
+      0.83099054477517,
+      0.062202237778362,
+      0.003649845217693
+     ],
+     "PSOA4P": [
+      3.508e-12,
+      5.6633745e-08,
+      0.00387570400562,
+      0.26955508720121,
+      0.33529140800219,
+      0.018356772488886,
+      0.001108564270908
+     ],
+     "PSOA1P": [
+      6.1e-14,
+      1.361467e-09,
+      0.000117286803288,
+      0.10241888137536,
+      0.5609651189294,
+      0.12183581385787,
+      0.007252443858303
+     ],
+     "PPOAlP": [
+      6.086e-12,
+      1.19343485e-07,
+      0.008727545005971,
+      0.62433899193975,
+      0.93630295130388,
+      0.070294771256129,
+      0.004371161477142
+     ]
+    }
+   },
+   "gas_ugm3": {
+    "SULF": 0.000795035914052,
+    "NH3": 1.13932681084,
+    "HNO3": 5.16737508774,
+    "HCL": 2.59052030256e-16,
+    "SOA5P": 4.1569939441992005,
+    "SOA3P": 0.322507752755396,
+    "SOA4P": 1.5124371722315,
+    "SOA1P": 0.0009837905417951001
+   }
+  },
+  "emissions": {
+   "particles": {
+    "mode": "bin_mass",
+    "mixing": "by_group",
+    "mass_ugm3_s": {
+     "PMD": [
+      0.0,
+      0.0,
+      0.0,
+      3.65498664905e-05,
+      7.3099732981125e-05,
+      7.3099732981125e-05,
+      0.0
+     ],
+     "PBC": [
+      0.0,
+      0.0,
+      7.614434289275e-05,
+      0.00022843666957,
+      0.00030458284309,
+      0.00030458284309,
+      0.0
+     ]
+    }
+   },
+   "gas_ugm3_s": {
+    "SULF": 1.7216629566975e-05,
+    "SOA3P": 0.00091374465264,
+    "SOA5P": 0.00116959311999
+   }
+  },
+  "processes": {
+   "coagulation": false,
+   "condensation": false,
+   "nucleation": {
+    "enabled": false,
+    "model": "ternary"
+   }
+  }
+ }
+}

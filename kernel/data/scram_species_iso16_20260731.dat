@@ -1,0 +1,104 @@
+[species]
+
+NH3 HCL O1D ETOH CH4 ETHA TOL XYL SO2 SULF
+SOA1P SOA2P SOA3P SOA4P SOA5P
+N2O5 NIT3 PAN ROR
+H2O2 HONO HCO3 API LIM HNO4 BiMT
+PANX BPI MEPX CRES OPEN MGLY ROOH PACD
+ETH FACD MPAN TERP
+ISOP ISPD NTR PAR ALDX ISOR MACR CO HNO3
+AACD FORM O OH NO3 ALD2 O3 XO2
+NO NO2 HO2
+
+[aerosol_species]
+PMD PBC PNA PSO4 PNH4 PNO3 PHCL PSOA1P PSOA2P PSOA3P PSOA4P PSOA5P PPOAlP PH2O
+
+[soluble_species_aer]
+PMD PBC PNA PSO4 PNH4 PNO3 PHCL PSOA1P PSOA2P PSOA3P PSOA4P PSOA5P PPOAlP
+
+[aerosol_groups]
+BC DU SLT SUF POA SED
+
+[aerosol_species_group_relations]
+PMD DU
+PBC BC
+PNA SLT
+PSO4 SUF
+PNH4 SED
+PNO3 SED
+PHCL SLT
+PSOA1P SED
+PSOA2P SED
+PSOA3P SED
+PSOA4P SED
+PSOA5P SED
+PPOAlP POA
+
+[mass_density_aer]
+PMD 2.60 PBC 1.70 PNA 1.90 PSO4 1.77 PNH4 1.77
+PNO3 1.77 PHCL 1.90 PSOA1P 1.0 PSOA2P 1.0 PSOA3P 1.0
+PSOA4P 1.0 PSOA5P 1.0 PPOAlP 1.0 PH2O 1.0
+
+[scram_id_aer]
+PMD 1 PBC 2 PNA 3 PSO4 4 PNH4 5 PNO3 6 PHCL 7 PSOA1P 8 PSOA2P 9 PSOA3P 10 PSOA4P 11 PSOA5P 12 PPOAlP 13 PH2O 14
+
+[isorropia_species]
+PNA PSO4 PNH4 PNO3 PHCL
+
+[pankow_species]
+PSOA1P PSOA2P PSOA3P PSOA4P PSOA5P
+
+[poa_species]
+PPOAlP
+
+[gas_species_aerosol_interact]
+# Maps each aerosol species to the gas species it condenses from.
+# Format: <aerosol_name> <gas_name>
+# Only species with persistent CAM gas hosts and gas-aerosol exchange are listed.
+# PMD, PBC, PNA, PH2O do not condense from gas phase.
+PSO4 SULF
+PNH4 NH3
+PNO3 HNO3
+PHCL HCL
+PSOA1P SOA1P
+PSOA2P SOA2P
+PSOA3P SOA3P
+PSOA4P SOA4P
+PSOA5P SOA5P
+
+[molecular_weight_aer]
+# Unit: g/mol (parser converts to microg/mol by multiplying 1e6)
+PMD 28.0 PBC 12.0 PNA 23.0 PSO4 98.0 PNH4 17.0
+PNO3 63.0 PHCL 36.5 PSOA1P 250.0 PSOA2P 250.0 PSOA3P 250.0
+PSOA4P 250.0 PSOA5P 250.0 PPOAlP 280.0 PH2O 18.0
+
+[molecular_diameter_aer]
+# Unit: Angstrom (passed directly to gas diffusivity routine)
+PSO4 5.5 PNH4 2.9 PNO3 3.3 PHCL 3.339
+PSOA1P 8.39 PSOA2P 8.39 PSOA3P 8.39 PSOA4P 8.39 PSOA5P 8.39
+
+[collision_factor_aer]
+PSO4 77.3 PNH4 558.3 PNO3 475.9 PHCL 344.7
+PSOA1P 687.0 PSOA2P 687.0 PSOA3P 687.0 PSOA4P 687.0 PSOA5P 687.0
+
+[saturation_pressure]
+# Saturation pressure (Pa) at 298 K; SOA values match C*=0.01,0.1,1,10,100 ug m-3
+PSOA1P 9.88e-8 PSOA2P 9.88e-7 PSOA3P 9.88e-6 PSOA4P 9.88e-5 PSOA5P 9.88e-4
+
+[partition_coefficient]
+# Partition coefficient (m^3.microg^-1) at 298 K; SOA only
+PSOA1P 100.0 PSOA2P 10.0 PSOA3P 1.0 PSOA4P 0.1 PSOA5P 0.01
+
+[vaporization_enthalpy]
+# Vaporization enthalpy (J/mol) at 298 K
+PSOA1P 153.0e3 PSOA2P 142.0e3 PSOA3P 131.0e3 PSOA4P 120.0e3 PSOA5P 109.0e3
+
+[accomodation_coefficient]
+# Accommodation coefficient (dimensionless)
+PSO4 0.65 PNH4 0.5 PNO3 0.5 PHCL 0.5
+PSOA1P 0.5 PSOA2P 0.5 PSOA3P 0.5 PSOA4P 0.5 PSOA5P 0.5
+
+[surface_tension]
+# Surface tension (N/m)
+PSO4 80.e-3 PNH4 80.e-3 PNO3 80.e-3 PHCL 80.e-3
+PSOA1P 30.e-3 PSOA2P 30.e-3 PSOA3P 30.e-3 PSOA4P 30.e-3 PSOA5P 30.e-3

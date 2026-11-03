@@ -1,0 +1,3 @@
+source: https://raw.githubusercontent.com/USEPA/CMAQ/9bd3734176479c2e49139fea98e1d5e8a16170e3/CCTM/src/aero/aero6/AERO_DATA.F
+fetched: 2026-10-08T11:31Z
+AERO_DATA_v55_ae7.F: copied from a local CMAQ v5.5 build (group CMAQ v5.5, cb6r5_ae7_aq), 2026-10-08

@@ -1,0 +1,144 @@
+{
+ "id": "dust_crustal",
+ "category": "mixing_state",
+ "name": {
+  "en": "Dust + crustal ions",
+  "zh": "沙尘 + 地壳离子"
+ },
+ "summary": {
+  "en": "A dust plume (CMAQ dust speciation: Ca, K, Mg, Na as fractions of dust) mixes with polluted air rich in nitric acid and ammonia while RH rises from 30% to 85%. With ISORROPIA II the crustal cations neutralise nitrate on dust (Ca(NO3)2); with v1 dust is inert.",
+  "zh": "沙尘气团（CMAQ 沙尘组分：Ca、K、Mg、Na 占沙尘质量比例）与富含硝酸和氨的污染气团混合，RH 从 30% 升至 85%。ISORROPIA II 中地壳阳离子在沙尘上中和硝酸盐（Ca(NO3)2）；v1 中沙尘为惰性。"
+ },
+ "tags": [
+  "dust",
+  "crustal ions",
+  "nitrate",
+  "ISORROPIA II"
+ ],
+ "notes": [
+  "Ca, K, Mg, Na are diagnosed by the v2.3 kernel from PMD with the CMAQ fine (<2.5 um) and coarse fractions (kernel/data/speciation_cmaq_aero.json).",
+  "Run with kernel v1 and v23: the difference is the crustal-ion effect."
+ ],
+ "case": {
+  "case": {
+   "reference": "CMAQ v5.5 AERO_DATA dust_spc / asoil factors; Fountoukis and Nenes (2007) ACP",
+   "name": "Dust + crustal ions",
+   "scenario_id": "dust_crustal",
+   "category": "mixing_state"
+  },
+  "kernel": {
+   "isorropia": "v23"
+  },
+  "environment": {
+   "temperature_K": 300.0,
+   "pressure_Pa": 101325.0,
+   "relative_humidity": 0.3,
+   "time_series": {
+    "time_s": [
+     0.0,
+     3600.0,
+     7200.0,
+     10800.0,
+     14400.0,
+     18000.0,
+     21600.0,
+     25200.0,
+     28800.0,
+     32400.0,
+     36000.0,
+     39600.0,
+     43200.0
+    ],
+    "temperature_K": [
+     300.0,
+     299.4,
+     298.8,
+     298.2,
+     297.6,
+     297.0,
+     296.4,
+     295.8,
+     295.2,
+     294.6,
+     294.0,
+     293.4,
+     292.8
+    ],
+    "relative_humidity": [
+     0.3,
+     0.355,
+     0.41000000000000003,
+     0.46499999999999997,
+     0.52,
+     0.575,
+     0.63,
+     0.685,
+     0.74,
+     0.795,
+     0.8500000000000001,
+     0.8500000000000001,
+     0.8500000000000001
+    ]
+   }
+  },
+  "time": {
+   "duration_s": 43200.0,
+   "dt_s": 600.0,
+   "output_every_s": 1800.0
+  },
+  "mixing": {
+   "preset": "NC6"
+  },
+  "size_bins": {
+   "mode": "log",
+   "n": 14,
+   "dmin_um": 0.01,
+   "dmax_um": 10.0
+  },
+  "initial": {
+   "particles": {
+    "mode": "lognormal",
+    "modes": [
+     {
+      "name": "dust fine",
+      "number_cm3": 20,
+      "dg_um": 0.4,
+      "sigma_g": 1.8,
+      "mass_fraction": {
+       "PMD": 1.0
+      }
+     },
+     {
+      "name": "dust coarse",
+      "number_cm3": 12,
+      "dg_um": 1.2,
+      "sigma_g": 1.8,
+      "mass_fraction": {
+       "PMD": 1.0
+      }
+     },
+     {
+      "name": "polluted sulfate",
+      "number_cm3": 2000,
+      "dg_um": 0.08,
+      "sigma_g": 1.6,
+      "mass_fraction": {
+       "PSO4": 0.727,
+       "PNH4": 0.273
+      }
+     }
+    ]
+   },
+   "gas_ugm3": {
+    "HNO3": 6.0,
+    "NH3": 4.0,
+    "HCL": 0.5
+   }
+  },
+  "emissions": {
+   "gas_ugm3_s": {
+    "SULF": 0.0001
+   }
+  }
+ }
+}
